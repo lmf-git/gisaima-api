@@ -1,0 +1,18 @@
+{
+  "name": "gisaima-api",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --preserve-symlinks index.js",
+    "dev": "node --preserve-symlinks --watch index.js"
+  },
+  "dependencies": {
+    "gisaima-shared": "lmf-git/gisaima-shared#679e77ccfd88bbb1fb9d900a6b09d77fd564aa50",
+    "mongodb": "^6.0.0",
+    "ws": "^8.0.0"
+  },
+  "resolutions": {
+    "gisaima-shared": "portal:../shared"
+  }
+}

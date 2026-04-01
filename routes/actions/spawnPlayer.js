@@ -1,0 +1,41 @@
+/**
+ * Spawn player action — places a player entity on the world map
+ */
+
+import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { getPlayerWorldData } from '../../db/players.js';
+import { applyUpdates } from '../../db/adapter.js';
+
+export async function spawnPlayer({ uid, data, db }) {
+  const { worldId, spawnX, spawnY } = data;
+
+  if (!worldId)                throw err(400, 'worldId is required');
+  if (typeof spawnX !== 'number' || typeof spawnY !== 'number') {
+    throw err(400, 'Valid spawn coordinates (spawnX, spawnY) are required');
+  }
+
+  const playerData = await getPlayerWorldData(db, uid, worldId);
+  if (!playerData) throw err(404, `Player is not a member of world ${worldId}`);
+
+  const displayName = playerData.displayName || uid.substring(0, 8);
+  const race        = playerData.race || 'human';
+  const chunkKey    = getChunkKey(spawnX, spawnY);
+  const tileKey     = `${spawnX},${spawnY}`;
+  const now         = Date.now();
+
+  const updates = {
+    // Place player entity on tile
+    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/players/${uid}`]: { displayName, id: uid, race },
+    // Mark player alive
+    [`players/${uid}/worlds/${worldId}/alive`]: true,
+    [`players/${uid}/worlds/${worldId}/lastLocation`]: { x: spawnX, y: spawnY, timestamp: now }
+  };
+
+  await applyUpdates(db, updates);
+
+  return { success: true, location: { x: spawnX, y: spawnY }, timestamp: now };
+}
+
+function err(status, msg) { return Object.assign(new Error(msg), { status }); }
+
+export { spawnPlayer as default };
