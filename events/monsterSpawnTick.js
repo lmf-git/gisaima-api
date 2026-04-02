@@ -14,9 +14,9 @@ import {
   PLAYER_STRUCTURE_ATTACK_CHANCE,
   isWaterTile,
   isBiomeCompatible 
-} from '../monsters/_monsters.mjs";
+} from '../monsters/_monsters.mjs';
 
-import { getRandomPersonality } from '../monsters/_monsters.mjs";
+import { getRandomPersonality } from '../monsters/_monsters.mjs';
 import { Units } from 'gisaima-shared/units/units.js';
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 
