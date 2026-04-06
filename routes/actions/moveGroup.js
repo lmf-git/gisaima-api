@@ -3,7 +3,8 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
+import { Ops } from '../../lib/ops.js';
 
 function calculatePath(startX, startY, endX, endY) {
   const path = [{ x: startX, y: startY }];
@@ -47,24 +48,40 @@ export async function moveGroup({ uid, data, db }) {
   const tickMs     = Math.round(60000 / worldSpeed);
   const movePath   = (path && Array.isArray(path) && path.length > 1)
     ? path : calculatePath(fromX, fromY, toX, toY);
-  const chatId = `move_start_${now}_${groupId}`;
 
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/status`]:       'moving',
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/movementPath`]: movePath,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/pathIndex`]:    0,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/moveStarted`]:  now,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/moveSpeed`]:    1,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/nextMoveTime`]: now + tickMs,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      type: 'system',
-      text: `${group.name || 'Unnamed group'} is setting out from (${fromX},${fromY}) to (${toX},${toY})`,
-      timestamp: now,
-      location: { x: fromX, y: fromY }
+  // Validate that the path respects the group's motion capabilities
+  const worldSeed = worldDoc?.info?.seed;
+  if (worldSeed !== undefined && worldSeed !== null) {
+    const generator = new TerrainGenerator(worldSeed, 1);
+    const isWaterOnly = group.motion?.includes('water') && !group.motion?.includes('ground') && !group.motion?.includes('flying');
+    const canTraverseWater = group.motion?.includes('water') || group.motion?.includes('flying');
+    for (const point of movePath) {
+      const terrain = generator.getTerrainData(point.x, point.y);
+      const isWaterTile = !!terrain?.biome?.water;
+      if (isWaterTile && !canTraverseWater) {
+        throw err(400, `Group cannot traverse water at (${point.x},${point.y}). Use a boat to cross water.`);
+      }
+      if (!isWaterTile && isWaterOnly) {
+        throw err(400, `Water-only group cannot move onto land at (${point.x},${point.y}). Load land units onto the boat first.`);
+      }
     }
-  };
+  }
 
-  await applyUpdates(db, updates);
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'moving');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, movePath);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    0);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  now);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    1);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, now + tickMs);
+  ops.chat(worldId, {
+    type: 'system',
+    text: `${group.name || 'Unnamed group'} is setting out from (${fromX},${fromY}) to (${toX},${toY})`,
+    timestamp: now,
+    location: { x: fromX, y: fromY }
+  });
+
+  await ops.flush(db);
 
   return {
     success: true,

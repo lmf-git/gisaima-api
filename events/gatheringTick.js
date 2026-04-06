@@ -5,22 +5,20 @@
 import { merge } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 
-export function processGathering(worldId, updates, group, chunkKey, tileKey, groupId, tile, now, terrainGenerator = null) {
+export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId, tile, now, terrainGenerator = null) {
   if (group.status === 'cancellingGather') return false;
   if (group.status !== 'gathering')        return false;
 
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-
   if (group.gatheringTicksRemaining === undefined) {
     console.warn(`Invalid gathering state for group ${groupId}`);
-    updates[`${groupPath}/status`]                  = 'idle';
-    updates[`${groupPath}/gatheringBiome`]           = null;
-    updates[`${groupPath}/gatheringTicksRemaining`]  = null;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'idle');
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,          null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, null);
     return false;
   }
 
   if (group.gatheringTicksRemaining > 1) {
-    updates[`${groupPath}/gatheringTicksRemaining`] = group.gatheringTicksRemaining - 1;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, group.gatheringTicksRemaining - 1);
     return false;
   }
 
@@ -41,23 +39,22 @@ export function processGathering(worldId, updates, group, chunkKey, tileKey, gro
 
   const gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
 
-  updates[`${groupPath}/items`]                  = group.items ? merge(group.items, gatheredItems) : gatheredItems;
-  updates[`${groupPath}/status`]                 = 'idle';
-  updates[`${groupPath}/gatheringBiome`]         = null;
-  updates[`${groupPath}/gatheringTicksRemaining`] = null;
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`,                  group.items ? merge(group.items, gatheredItems) : gatheredItems);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'idle');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, null);
 
   const itemsList = Object.entries(gatheredItems).map(([code, qty]) => {
     const def = ITEMS[code];
     return def ? `${qty} ${def.name}${def.rarity && def.rarity !== 'common' ? ` (${def.rarity})` : ''}` : `${qty} ${code}`;
   });
 
-  const chatId = `gather_${now}_${groupId}`;
-  updates[`worlds/${worldId}/chat/${chatId}`] = {
-    text: `${group.name || 'Unnamed group'} gathered resources in ${biome} biome at (${tileKey.replace(',', ', ')})${itemsList.length ? ': ' + itemsList.join(', ') : ''}`,
+  ops.chat(worldId, {
+    text: `${group.name || 'Unnamed group'} gathered resources in ${biome} biome at (${x}, ${y})${itemsList.length ? ': ' + itemsList.join(', ') : ''}`,
     type: 'event',
     timestamp: now,
     location: { x, y }
-  };
+  });
 
   // Special announcement for rare+ items
   const specialItems = Object.entries(gatheredItems)
@@ -66,13 +63,12 @@ export function processGathering(worldId, updates, group, chunkKey, tileKey, gro
 
   if (specialItems.length > 0) {
     const stars = { rare: '★★★', epic: '★★★★', legendary: '★★★★★', mythic: '✦✦✦✦✦' };
-    const rareChatId = `rare_${now}_${groupId}`;
-    updates[`worlds/${worldId}/chat/${rareChatId}`] = {
+    ops.chat(worldId, {
       text: `${group.name || 'Unnamed group'} has discovered something extraordinary!\n${specialItems.map(i => `${stars[i.rarity.toLowerCase()] || '★★★'} ${i.name} ${stars[i.rarity.toLowerCase()] || '★★★'}`).join('\n')}`,
       type: 'event',
       timestamp: now + 1,
       location: { x, y }
-    };
+    });
   }
 
   return true;

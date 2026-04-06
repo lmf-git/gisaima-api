@@ -5,12 +5,11 @@
 
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
 
-export function processRecruitment(worldId, updates, chunkKey, tileKey, tile, now) {
+export function processRecruitment(worldId, ops, chunkKey, tileKey, tile, now) {
   if (!tile?.structure?.recruitmentQueue) return 0;
 
-  let processed      = 0;
-  const structurePath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`;
-  const structure     = tile.structure;
+  let processed = 0;
+  const structure = tile.structure;
 
   for (const [recruitmentId, recruitment] of Object.entries(structure.recruitmentQueue)) {
     if (!recruitment.completesAt || recruitment.completesAt > now) continue;
@@ -26,10 +25,9 @@ export function processRecruitment(worldId, updates, chunkKey, tileKey, tile, no
     const icon           = unitDefinition.icon || recruitment.icon || 'sword';
     const newUnitId      = `unit_${now}_${recruitmentId}`;
 
-    // Remove from queue
-    updates[`${structurePath}/recruitmentQueue/${recruitmentId}`] = null;
+    ops.chunk(worldId, chunkKey, `${tileKey}.structure.recruitmentQueue.${recruitmentId}`, null);
 
-    if (!structure.units) updates[`${structurePath}/units`] = {};
+    if (!structure.units) ops.chunk(worldId, chunkKey, `${tileKey}.structure.units`, {});
 
     const unitGroup = {
       id: newUnitId,
@@ -47,28 +45,24 @@ export function processRecruitment(worldId, updates, chunkKey, tileKey, tile, no
     };
 
     if (Array.isArray(structure.units)) {
-      updates[`${structurePath}/units/${structure.units.length}`] = unitGroup;
+      ops.chunk(worldId, chunkKey, `${tileKey}.structure.units.${structure.units.length}`, unitGroup);
     } else {
-      updates[`${structurePath}/units/${unitId}`] = unitGroup;
+      ops.chunk(worldId, chunkKey, `${tileKey}.structure.units.${unitId}`, unitGroup);
     }
 
     if (owner) {
-      updates[`players/${owner}/worlds/${worldId}/structures/${structure.id}/units/${unitId}`] = {
+      ops.player(owner, worldId, `structures.${structure.id}.units.${unitId}`, {
         id: unitId, name: `${unitName} Group`, quantity
-      };
+      });
     }
 
-    const chatId = `recruit_complete_${now}_${Math.floor(Math.random() * 1000)}`;
-    updates[`worlds/${worldId}/chat/${chatId}`] = {
-      text: `${quantity} ${unitName} units completed recruitment at (${tileKey.replace(',', ', ')})`,
+    const [x, y] = tileKey.split(',').map(Number);
+    ops.chat(worldId, {
+      text: `${quantity} ${unitName} units completed recruitment at (${x}, ${y})`,
       type: 'event',
       timestamp: now,
-      location: {
-        x: parseInt(tileKey.split(',')[0]),
-        y: parseInt(tileKey.split(',')[1]),
-        timestamp: now
-      }
-    };
+      location: { x, y, timestamp: now }
+    });
 
     processed++;
   }

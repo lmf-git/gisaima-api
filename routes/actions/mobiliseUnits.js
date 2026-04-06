@@ -4,7 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function mobiliseUnits({ uid, data, db }) {
   const { worldId, tileX, tileY, units = [], includePlayer, name, race } = data;
@@ -79,23 +79,22 @@ export async function mobiliseUnits({ uid, data, db }) {
 
   updatedGroups[newGroupId] = newGroup;
 
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups`]: updatedGroups,
-    [`worlds/${worldId}/chat/mob_${now}_${newGroupId}`]: {
-      type: 'system',
-      text: `${name.trim()} is being mobilized at (${tileX},${tileY})`,
-      timestamp: now, location: { x: tileX, y: tileY }
-    },
-    [`players/${uid}/worlds/${worldId}/achievements/mobilised`]: true
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups`, updatedGroups);
+  ops.chat(worldId, {
+    type: 'system',
+    text: `${name.trim()} is being mobilized at (${tileX},${tileY})`,
+    timestamp: now, location: { x: tileX, y: tileY }
+  });
+  ops.player(uid, worldId, 'achievements.mobilised', true);
 
   if (includePlayer) {
-    updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/players/${uid}`] = null;
-    updates[`players/${uid}/worlds/${worldId}/lastLocation`] = { x: tileX, y: tileY };
-    updates[`players/${uid}/worlds/${worldId}/inGroup`]      = newGroupId;
+    ops.chunk(worldId, chunkKey, `${tileKey}.players.${uid}`, null);
+    ops.player(uid, worldId, 'lastLocation', { x: tileX, y: tileY });
+    ops.player(uid, worldId, 'inGroup',      newGroupId);
   }
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, groupId: newGroupId };
 }
 

@@ -1,7 +1,7 @@
-import { 
-  calculateGroupPower, 
-  calculatePowerRatios, 
-  calculateAttrition, 
+import {
+  calculateGroupPower,
+  calculatePowerRatios,
+  calculateAttrition,
   selectUnitsForCasualties,
   processPvPCombat,
 } from "gisaima-shared/war/battles.js";
@@ -16,82 +16,50 @@ export function distributeLootToWinner({
   worldId,
   chunkKey,
   tileKey,
-  updates,
+  ops,
   tile // Add tile parameter to access existing items
 }) {
   if (!battleLoot || Object.keys(battleLoot).length === 0) return;
-  
+
   let winnerGroups = [];
   if (winner === 1) {
     winnerGroups = side1Surviving;
   } else if (winner === 2) {
     winnerGroups = side2Surviving;
   }
-  
+
   if (winnerGroups.length > 0) {
     // Select a random surviving group from winning side
     const receivingGroupId = winnerGroups[Math.floor(Math.random() * winnerGroups.length)];
-    
-    // Get current group items and merge with loot
-    const groupItemsPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${receivingGroupId}/items`;
-    
+
     // Check if the group already has items
     const receivingGroup = tile.groups?.[receivingGroupId];
     const existingGroupItems = receivingGroup?.items || {};
-    
-    // First merge existing group items with any pending updates
-    const combinedExisting = merge(
-      existingGroupItems,
-      updates[groupItemsPath] || {}
-    );
-    
-    // Then merge the combined existing items with battle loot
-    updates[groupItemsPath] = merge(
-      combinedExisting,
-      battleLoot
-    );
+
+    // Merge existing group items with battle loot
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${receivingGroupId}.items`, merge(existingGroupItems, battleLoot));
   } else {
     // If winner is determined but no surviving groups, OR if it's a draw (winner === 0)
     // Check if there's a structure to add loot to, otherwise leave on tile as "treasure"
     if (tile.structure) {
       // Add loot to structure if it exists
-      const structurePath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/items`;
-      
+
       // Get existing structure items
       const existingStructureItems = tile.structure.items || {};
-      
-      // First merge existing structure items with any pending updates
-      const combinedExisting = merge(
-        existingStructureItems,
-        updates[structurePath] || {}
-      );
-      
-      // Then merge the combined existing items with battle loot
-      updates[structurePath] = merge(
-        combinedExisting,
-        battleLoot
-      );
-      
+
+      // Merge existing structure items with battle loot
+      ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, merge(existingStructureItems, battleLoot));
+
       console.log(`Battle loot added to structure - items merged with existing structure inventory`);
     } else {
       // No structure - store loot on tile as "treasure"
-      const tileLootPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/items`;
-      
+
       // Get existing tile items to merge with
       const existingTileItems = tile?.items || {};
-      
-      // First merge existing tile items with any pending updates
-      const combinedExisting = merge(
-        existingTileItems,
-        updates[tileLootPath] || {}
-      );
-      
-      // Then merge the combined existing items with battle loot
-      updates[tileLootPath] = merge(
-        combinedExisting,
-        battleLoot
-      );
-      
+
+      // Merge existing tile items with battle loot
+      ops.chunk(worldId, chunkKey, `${tileKey}.items`, merge(existingTileItems, battleLoot));
+
       // Log appropriate message based on result
       if (winner === 0) {
         console.log(`Battle ended in a draw - loot merged with existing items on tile as treasure`);
@@ -103,20 +71,20 @@ export function distributeLootToWinner({
 };
 
 export function processSide({
-  sideNumber, 
-  sideGroups, 
-  sidePower, 
+  sideNumber,
+  sideGroups,
+  sidePower,
   sideAttrition,
   sideCasualties,
-  updates,
+  ops,
   groupPowers,
   groupsToBeDeleted,
   groupsToDelete,
   playersKilled,
   battleLoot,
   tile,
-  worldId, 
-  chunkKey, 
+  worldId,
+  chunkKey,
   tileKey,
   basePath,
   fleeingGroups
@@ -124,109 +92,107 @@ export function processSide({
   let newSidePower = 0;
   let updatedCasualties = sideCasualties;
   const sideKey = `side${sideNumber}`;
-  
+  const battleId = basePath.split('/').slice(-1)[0]; // last segment of basePath
+
   for (const groupId in sideGroups) {
     if (!tile.groups[groupId]) continue;
-    
+
     const group = tile.groups[groupId];
-    
+
     // Handle groups that are in fleeing state (changed from fleeingBattle)
     if (group.status === 'fleeing') {
       console.log(`Processing fleeing group ${groupId} in battle - cleaning up and removing from side ${sideNumber}`);
-      
-      // Remove the group from battle
-      const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-      
+
       // Update the group status to idle and remove all battle references
-      updates[`${groupPath}/battleId`] = null;
-      updates[`${groupPath}/battleSide`] = null;
-      updates[`${groupPath}/battleRole`] = null;
-      updates[`${groupPath}/status`] = 'idle';
-      updates[`${groupPath}/fleeTickRequested`] = null;
-      
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleId`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleSide`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleRole`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.fleeTickRequested`, null);
+
       // Remove the group from the battle's side
-      updates[`${basePath}/${sideKey}/groups/${groupId}`] = null;
-      
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.${sideKey}.groups.${groupId}`, null);
+
       // Track this group as being processed for fleeing
       fleeingGroups.push({
         groupId,
         side: sideNumber,
         name: group.name || "Unknown group"
       });
-      
+
       // Skip the rest of battle processing for this group
       continue;
     }
-    
+
     const units = group.units || {};
     const unitCount = Object.keys(units).length;
-    
+
     // Use the stored group power
     const groupPower = groupPowers[groupId];
     const groupShare = sidePower > 0 ? groupPower / sidePower : 1;
     const groupAttrition = Math.round(sideAttrition * groupShare); // Using sideAttrition instead of oppositeAttrition
-    
+
     // Log the attrition calculation
     console.log(`Side ${sideNumber} Group ${groupId} attrition calculation: ${sideAttrition} * ${groupShare.toFixed(2)} = ${groupAttrition}`);
-    
+
     // Add extra protection for solo player units in dominant groups
-    const isSoloPlayerUnit = unitCount === 1 && 
+    const isSoloPlayerUnit = unitCount === 1 &&
                              Object.values(units)[0].type === 'player';
-    
+
     // If this is a single player unit and the attrition was calculated to be 0,
     // ensure they don't take casualties
     if (isSoloPlayerUnit && sideAttrition === 0) {
       console.log(`Protecting solo player in dominant group ${groupId} from casualties`);
       continue;
     }
-    
+
     // Select units for casualties
-    const { unitsToRemove, playersKilled: groupPlayersKilled } = 
+    const { unitsToRemove, playersKilled: groupPlayersKilled } =
       selectUnitsForCasualties(units, groupAttrition);
-      
+
     // Log the units selected for removal
     console.log(`Side ${sideNumber} Group ${groupId} units to remove: ${JSON.stringify(unitsToRemove)}`);
-    
+
     // Add players killed to the list
     playersKilled.push(...groupPlayersKilled);
-    
+
     // Calculate remaining units
     const remainingUnits = { ...units };
     unitsToRemove.forEach(unitId => delete remainingUnits[unitId]);
     const newUnitCount = Object.keys(remainingUnits).length;
-    
+
     // Update casualty count
     const casualties = unitsToRemove.length;
     updatedCasualties += casualties;
-    updates[`${basePath}/${sideKey}/casualties`] = updatedCasualties;
-    
+    ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.${sideKey}.casualties`, updatedCasualties);
+
     // Check if the group will be destroyed
     if (newUnitCount <= 0) {
       // Add to deletion tracking
       const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
       groupsToBeDeleted.add(groupPath);
-      
+
       groupsToDelete.push({
         side: sideNumber,
         groupId,
         path: groupPath
       });
-      
+
       // Remove group from battle and database
-      updates[`${basePath}/${sideKey}/groups/${groupId}`] = null;
-      updates[groupPath] = null;
-      
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.${sideKey}.groups.${groupId}`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}`, null);
+
       // Handle players in group
       for (const unitId in units) {
         if (units[unitId].type === 'player' && units[unitId].id) {
-          updates[`players/${units[unitId].id}/worlds/${worldId}/inGroup`] = null;
+          ops.player(units[unitId].id, worldId, 'inGroup', null);
         }
       }
-      
+
       // Collect loot from defeated group
       if (group.items) {
         console.log(`Processing items from defeated group ${groupId}:`, group.items);
-        
+
         // Always treat items as object format {itemcode: qty}
         if (typeof group.items === 'object' && !Array.isArray(group.items)) {
           // Directly merge these items with the battle loot
@@ -241,7 +207,7 @@ export function processSide({
               convertedItems[itemCode] = (convertedItems[itemCode] || 0) + (item.quantity || 1);
             }
           });
-          
+
           // Merge with battle loot without reassigning
           Object.assign(battleLoot, merge(battleLoot, convertedItems));
           console.log(`Converted legacy items from defeated group ${groupId} to new format. Current loot:`, battleLoot);
@@ -250,50 +216,46 @@ export function processSide({
     } else {
       // Remove selected units - adding explicit logging for each update path
       unitsToRemove.forEach(unitId => {
-        updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/units/${unitId}`] = null;
-        updates[`${basePath}/${sideKey}/groups/${groupId}/units/${unitId}`] = null;
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.units.${unitId}`, null);
+        ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.${sideKey}.groups.${groupId}.units.${unitId}`, null);
       });
-      
+
       // Calculate new group power
       const newGroupPower = calculateGroupPower({ units: remainingUnits });
       console.log(`Group ${groupId} new power after casualties: ${newGroupPower} (removed ${unitsToRemove.length} units)`);
       newSidePower += newGroupPower;
     }
   }
-  
+
   return { newSidePower, updatedCasualties };
 };
 
-export async function processBattle(worldId, chunkKey, tileKey, battleId, battle, updates, tile) {
+export async function processBattle(worldId, chunkKey, tileKey, battleId, battle, ops, tile) {
   try {
     // Use serverTimestamp for database records only
     const basePath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/battles/${battleId}`;
-    
-    // Create a separate updates object for battle-specific updates to avoid path conflicts
-    const battleUpdates = {};
-    
+
     // Track groups that will be deleted to avoid update conflicts
     const groupsToBeDeleted = new Set();
-    
+
     // Track groups that are fleeing
     const fleeingGroups = [];
-    
+
     // Increment the tick count - this is now our primary battle progression metric
     const tickCount = (battle.tickCount || 0) + 1;
-    battleUpdates.tickCount = tickCount;
-    
+
     // Get sides data
     const side1 = battle.side1 || {};
     const side2 = battle.side2 || {};
-    
+
     // --------- PHASE 1: CALCULATE INITIAL POWERS ---------
     // Recalculate power values using strength-based calculation
     let side1Power = 0;
     let side2Power = 0;
-    
+
     // Store individual group powers to avoid recalculating later
     const groupPowers = {};
-    
+
     // CRITICAL FIX: Safely access groups with defaults
     const side1Groups = side1.groups || {};
     for (const groupId in side1Groups) {
@@ -305,7 +267,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         console.log(`Side 1 Group ${groupId} calculated power: ${power}`);
       }
     }
-    
+
     // CRITICAL FIX: Safely access groups with defaults
     const side2Groups = side2.groups || {};
     for (const groupId in side2Groups) {
@@ -317,7 +279,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         console.log(`Side 2 Group ${groupId} calculated power: ${power}`);
       }
     }
-    
+
     // Add structure power if applicable - now using STRUCTURES definition
     let structurePower = 0;
     if (battle.structureId && tile.structure && tile.structure.type) {
@@ -328,49 +290,49 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         console.log(`Structure power from ${structureType} durability: ${structurePower}`);
       }
     }
-    
+
     // Add a small random factor to prevent exact power equality and eventual stalemates
     // This ensures battles will eventually resolve even with identical forces
     const randomFactor = 0.05; // 5% maximum random variance
     side1Power = side1Power * (1 + (Math.random() * randomFactor - randomFactor/2));
     side2Power = side2Power * (1 + (Math.random() * randomFactor - randomFactor/2));
-    
+
     console.log(`Final battle powers - Side 1: ${side1Power}, Side 2: ${side2Power}`);
-    
+
     // --------- PHASE 2: CALCULATE ATTRITION ---------
     // Use the new functions to calculate power ratios and attrition
     const { side1Ratio, side2Ratio } = calculatePowerRatios(side1Power, side2Power);
-    
+
     // NEW: Add special PvP combat processing before calculating attrition
     // This will mark player units for special combat rules and determine critical hits
-    const { side1: updatedSide1, side2: updatedSide2 } = 
+    const { side1: updatedSide1, side2: updatedSide2 } =
       processPvPCombat(battle.side1, battle.side2, tickCount);
-    
+
     // Store any updates back to the battle object
     battle.side1 = updatedSide1;
     battle.side2 = updatedSide2;
-    
+
     let side1Attrition = calculateAttrition(side1Power, side1Ratio, side2Ratio);
     let side2Attrition = calculateAttrition(side2Power, side2Ratio, side1Ratio);
 
     // IMPROVED: Better stalemate handling with more randomness and luck factor
     if (side1Power > 0 && side2Power > 0 && side1Attrition === 0 && side2Attrition === 0) {
       console.log("Potential stalemate detected - applying luck factor");
-      
+
       // Calculate power difference as a percentage of total power
       const powerDifference = Math.abs(side1Power - side2Power) / (side1Power + side2Power);
-      
+
       // Add randomness that favors the stronger side but still gives the weaker side a chance
       // The closer the powers, the more random the outcome
       const strongerSide = side1Power > side2Power ? 1 : 2;
-      
+
       // Base chance for stronger side - ranges from 50% (equal) to 80% (30% difference)
       const strongerSideChance = Math.min(0.8, 0.5 + powerDifference);
-      
+
       // Random factor with bias toward stronger side
       const luckFactor = Math.random();
       const luckyStrongerSide = luckFactor < strongerSideChance;
-      
+
       // Apply attrition to the unlucky side
       if ((strongerSide === 1 && luckyStrongerSide) || (strongerSide === 2 && !luckyStrongerSide)) {
         // Side 1 is lucky/stronger - Side 2 takes attrition
@@ -381,7 +343,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         side1Attrition = Math.max(1, Math.floor(side1Power * 0.1 * (Math.random() + 0.5)));
         console.log(`Stalemate broken by luck: Side 1 takes ${side1Attrition} attrition`);
       }
-      
+
       // Add battle event to show the lucky break
       if (!battle.events) battle.events = [];
       battle.events.push({
@@ -389,29 +351,29 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         tickCount: tickCount,
         text: `A stroke of luck changes the battle's course!`
       });
-      updates[`${basePath}/events`] = battle.events;
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.events`, battle.events);
     }
 
     console.log('side1 attrition', side1Attrition);
     console.log('side2 attrition', side2Attrition);
-    
+
     // --------- PHASE 3: APPLY CASUALTIES AND CALCULATE NEW POWERS ---------
     // Initialize casualty counts and battle updates
     let newSide1Power = 0;
     let newSide2Power = 0;
-    
+
     // Initialize casualty counts from battle's existing values
     let side1Casualties = (side1.casualties || 0);
     let side2Casualties = (side2.casualties || 0);
-    
+
     // Make sure our battle updates will preserve these values
-    updates[`${basePath}/side1/casualties`] = side1Casualties;
-    updates[`${basePath}/side2/casualties`] = side2Casualties;
-    
+    ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.side1.casualties`, side1Casualties);
+    ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.side2.casualties`, side2Casualties);
+
     // Track groups to be deleted and players to be killed
     const groupsToDelete = [];
     const playersKilled = [];
-    
+
     // FIXED: Initialize battleLoot as an object, not an array
     const battleLoot = battle.loot || {};
 
@@ -422,7 +384,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       sidePower: side1Power,
       sideAttrition: side1Attrition,
       sideCasualties: side1Casualties,
-      updates,
+      ops,
       groupPowers,
       groupsToBeDeleted,
       groupsToDelete,
@@ -437,14 +399,14 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     });
     newSide1Power = side1Result.newSidePower;
     side1Casualties = side1Result.updatedCasualties;
-    
+
     const side2Result = processSide({
       sideNumber: 2,
       sideGroups: side2Groups,
       sidePower: side2Power,
       sideAttrition: side2Attrition,
       sideCasualties: side2Casualties,
-      updates,
+      ops,
       groupPowers,
       groupsToBeDeleted,
       groupsToDelete,
@@ -459,27 +421,27 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     });
     newSide2Power = side2Result.newSidePower;
     side2Casualties = side2Result.updatedCasualties;
-    
+
     // Add structure power if applicable - now using the same structurePower variable
     if (structurePower > 0) {
       newSide2Power += structurePower;
     }
-    
+
     // CRITICAL FIX: Calculate surviving groups IMMEDIATELY after processing both sides
     // Ensure we're safely accessing groups with defaults
     const side1Surviving = Object.keys(side1Groups || {})
-      .filter(id => 
-        !groupsToDelete.some(g => g.groupId === id && g.side === 1) && 
+      .filter(id =>
+        !groupsToDelete.some(g => g.groupId === id && g.side === 1) &&
         !fleeingGroups.some(g => g.groupId === id && g.side === 1));
-    
+
     const side2Surviving = Object.keys(side2Groups || {})
-      .filter(id => 
+      .filter(id =>
         !groupsToDelete.some(g => g.groupId === id && g.side === 2) &&
         !fleeingGroups.some(g => g.groupId === id && g.side === 2));
-    
+
     console.log(`After processing: Side 1 surviving groups: ${side1Surviving.length}, Side 2 surviving groups: ${side2Surviving.length}`);
     console.log(`Fleeing groups: ${fleeingGroups.length}, Groups to delete: ${groupsToDelete.length}`);
-    
+
     // Add battle events for any fleeing groups
     if (fleeingGroups.length > 0) {
       // Create a new event for each fleeing group
@@ -491,42 +453,42 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           groupId: fleeGroup.groupId,
           side: fleeGroup.side
         };
-        
+
         // Only add battle events if the battle will continue
         if (side1Surviving.length > 0 && side2Surviving.length > 0) {
           if (!battle.events) battle.events = [];
           battle.events.push(newEvent);
         }
       });
-      
+
       // Update battle events if battle continues
       if (side1Surviving.length > 0 && side2Surviving.length > 0) {
-        updates[`${basePath}/events`] = battle.events;
+        ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.events`, battle.events);
       }
     }
-    
+
     // Log the status of all updates
-    console.log(`Battle ${battleId} tick ${tickCount} update operations: ${Object.keys(updates).length}`);
+    console.log(`Battle ${battleId} tick ${tickCount}`);
     console.log(`Side 1 units attrition: ${side1Attrition}, casualties: ${side1Casualties}, surviving groups: ${side1Surviving.length}`);
     console.log(`Side 2 units attrition: ${side2Attrition}, casualties: ${side2Casualties}, surviving groups: ${side2Surviving.length}`);
-    
+
     // --------- PHASE 4: CHECK FOR BATTLE END CONDITIONS ---------
-    
+
     // IMPORTANT FIX: Check if all groups on a side have fled or been destroyed
     // A battle ends when one side has no units left
     const side1Defeated = side1Surviving.length === 0;
-    
+
     // For side2, consider structure as a valid combat entity on its own
     // A structure with significant health should count as "not defeated" even without groups
     let side2Defeated = false;
-    
+
     if (battle.structureId && tile.structure && structurePower > 0) {
       // Get current structure health
       const structureType = tile.structure.type;
       const maxDurability = STRUCTURES[structureType]?.durability || 100;
       const currentHealth = tile.structure.health !== undefined ? tile.structure.health : maxDurability;
       const criticalThreshold = Math.floor(maxDurability * 0.15);
-      
+
       // Structure is only defeated if its health is critically low
       if (currentHealth <= criticalThreshold) {
         side2Defeated = true;
@@ -542,18 +504,18 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       // No structure or structure with no power, so check if there are any surviving groups
       side2Defeated = side2Surviving.length === 0;
     }
-    
+
     // NEW: If all groups on a side fled, add a specific battle outcome message
-    if (side1Defeated && side1Surviving.length === 0 && 
+    if (side1Defeated && side1Surviving.length === 0 &&
         fleeingGroups.some(g => g.side === 1)) {
       console.log(`Side 1 completely fled from battle - they are considered defeated`);
     }
-    
-    if (side2Defeated && side2Surviving.length === 0 && 
+
+    if (side2Defeated && side2Surviving.length === 0 &&
         fleeingGroups.some(g => g.side === 2)) {
       console.log(`Side 2 completely fled from battle - they are considered defeated`);
     }
-    
+
     // CRITICAL FIX: PvP Critical Hit Tie-Breaker System
     // In case of mutual defeat, check if any player landed a critical hit
     let criticalHitTiebreaker = null;
@@ -561,7 +523,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       // Check for critical hits that might determine a winner in a tie situation
       const side1CriticalHits = checkSideForCriticalHits(battle.side1);
       const side2CriticalHits = checkSideForCriticalHits(battle.side2);
-      
+
       // If one side has critical hits and the other doesn't, that side wins
       if (side1CriticalHits && !side2CriticalHits) {
         console.log("Side 1 wins by critical hit tie-breaker advantage!");
@@ -573,7 +535,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         console.log("Both sides had critical hits, tie remains!");
       }
     }
-    
+
     // Determine the winner directly from defeat flags, with critical hit tie-breaker
     let winner;
     if (side1Defeated && side2Defeated) {
@@ -596,11 +558,11 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       const longBattle = tickCount >= 10;
       const minimalCasualties = side1Casualties + side2Casualties <= Math.floor(tickCount / 2);
       const powerRatioExtreme = side1Ratio > 0.8 || side2Ratio > 0.8;
-      
+
       if (longBattle && minimalCasualties) {
         // This battle has gone on too long with minimal progress
         console.log(`Long battle (${tickCount} ticks) with minimal casualties - forcing resolution`);
-        
+
         // Heavily favor the dominant side if there is one
         if (powerRatioExtreme) {
           winner = side1Ratio > 0.8 ? 1 : 2;
@@ -624,27 +586,27 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         console.log("Battle continues - both sides still have forces");
       }
     }
-    
+
     // Check if this battle has produced any battle events for critical hits or other PvP actions
     let battleEvents = battle.events || [];
     const criticalHits = getPvPCriticalHits(battle);
-    
+
     if (criticalHits.length > 0) {
       // Add battle event for each critical hit
       criticalHits.forEach(hit => {
         // Enhanced messages for multi-player PvP
         let critMessage = `${hit.playerName} landed a critical hit!`;
-        
+
         // If we have target information, create more detailed combat messages
         if (hit.targetName) {
           critMessage = `${hit.playerName} landed a critical hit on ${hit.targetName}!`;
         }
-        
+
         // Special messages for combo hits
         if (hit.isCombo) {
           critMessage += ` Part of a devastating combo attack!`;
         }
-        
+
         battleEvents.push({
           type: 'criticalHit',
           tickCount: tickCount,
@@ -653,43 +615,41 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           side: hit.side
         });
       });
-      
+
       // Update battle events
-      updates[`${basePath}/events`] = battleEvents;
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.events`, battleEvents);
     }
-    
+
     // Process players killed in battle with enhanced PvP death messages
     if (playersKilled.length > 0) {
       console.log(`Processing ${playersKilled.length} players killed in battle ${battleId}`);
-      
+
       // For each killed player, mark them as not alive and clear their group
       playersKilled.forEach(player => {
         const playerId = player.playerId;
         if (playerId) {
           // Set alive status to false
-          updates[`players/${playerId}/worlds/${worldId}/alive`] = false;
-          
+          ops.player(playerId, worldId, 'alive', false);
+
           // Clear their group reference
-          updates[`players/${playerId}/worlds/${worldId}/inGroup`] = null;
-          
+          ops.player(playerId, worldId, 'inGroup', null);
+
           // Add a clear death message to the player's record
-          updates[`players/${playerId}/worlds/${worldId}/lastMessage`] = {
+          ops.player(playerId, worldId, 'lastMessage', {
             text: "Died in battle",
             timestamp: Date.now()
-          };
-          
+          });
+
           console.log(`Player ${playerId} (${player.displayName}) killed in battle and marked as dead`);
-          
+
           // Add a chat message about player death - enhanced for PvP
-          const chatMessageId = `player_death_${playerId}_${Date.now()}`;
-          
           let deathMessage = `${player.displayName || "A player"} has fallen in battle at (${battle.locationX}, ${battle.locationY})`;
-          
+
           // If this was a PvP kill and we know who did it, enhance the message
           if (player.killedBy) {
             // Find the killer's name if available
             let killerName = "another player";
-            
+
             // Search both sides for the killer
             const findPlayerName = (sideObj, targetId) => {
               for (const groupId in sideObj.groups || {}) {
@@ -703,12 +663,12 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               }
               return null;
             };
-            
+
             // Try to find the killer in either battle side
             const killerNameSide1 = findPlayerName(battle.side1, player.killedBy.id);
             const killerNameSide2 = findPlayerName(battle.side2, player.killedBy.id);
             killerName = killerNameSide1 || killerNameSide2 || killerName;
-            
+
             // Create a PvP-specific death message
             if (player.killedBy.critical) {
               deathMessage = `${player.displayName || "A player"} was defeated by ${killerName}'s critical hit at (${battle.locationX}, ${battle.locationY})!`;
@@ -716,8 +676,8 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               deathMessage = `${player.displayName || "A player"} was defeated by ${killerName} at (${battle.locationX}, ${battle.locationY})!`;
             }
           }
-          
-          updates[`worlds/${worldId}/chat/${chatMessageId}`] = {
+
+          ops.chat(worldId, {
             text: deathMessage,
             type: 'event',
             timestamp: Date.now(),
@@ -725,19 +685,19 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               x: battle.locationX,
               y: battle.locationY
             }
-          };
+          });
         }
       });
     }
-    
+
     if (winner === undefined) {
       // Update battle tick count directly at the path
-      updates[`${basePath}/tickCount`] = tickCount;
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.tickCount`, tickCount);
       // Update loot
-      updates[`${basePath}/loot`] = battleLoot;
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.loot`, battleLoot);
     } else {
       console.log(`Battle ${battleId} ending after ${tickCount} ticks. Power levels: Side 1: ${newSide1Power}, Side 2: ${newSide2Power}`);
-      
+
       // Use the extracted function to distribute loot
       distributeLootToWinner({
         winner,
@@ -747,15 +707,15 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         worldId,
         chunkKey,
         tileKey,
-        updates,
+        ops,
         tile // Pass the tile parameter to access existing items
       });
-      
+
       // Generate side names for chat message
       const side1Name = battle.side1.name || 'Attackers';
       const side2Name = battle.side2.name || 'Defenders';
       let resultText = '';
-      
+
       if (winner === 1) {
         resultText = `${side1Name} have defeated ${side2Name}!`;
       } else if (winner === 2) {
@@ -763,15 +723,15 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       } else {
         resultText = `The battle between ${side1Name} and ${side2Name} has ended in a stalemate.`;
       }
-      
+
       // Add chat message about battle ending
       const now = Date.now();
-      
+
       // FIXED: Ensure location coordinates are always valid by using tile coordinates if battle location is undefined
       const locationX = battle.locationX !== undefined ? battle.locationX : parseInt(tileKey.split(',')[0]);
       const locationY = battle.locationY !== undefined ? battle.locationY : parseInt(tileKey.split(',')[1]);
-      
-      updates[`worlds/${worldId}/chat/battle_end_${now}_${battleId}`] = {
+
+      ops.chat(worldId, {
         text: `Battle at (${locationX}, ${locationY}) has ended. ${resultText}`,
         type: 'event',
         timestamp: now,
@@ -779,42 +739,42 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           x: locationX,
           y: locationY
         }
-      };
-      
+      });
+
       if (tile && tile.groups) {
         // Log battle result for debugging
         console.log(`Battle ${battleId} ended. Winner: ${winner === 1 ? side1Name : (winner === 2 ? side2Name : 'Draw')}`);
         console.log(`Side 1 groups: ${JSON.stringify(Object.keys(battle.side1.groups || {}))}`);
         console.log(`Side 2 groups: ${JSON.stringify(Object.keys(battle.side2.groups || {}))}`);
-        
+
         // Clean up ALL groups that were in the battle, regardless of winner
         const allBattleGroups = {
           ...battle.side1.groups || {},
           ...battle.side2.groups || {}
         };
-        
+
         console.log(`Cleaning up ${Object.keys(allBattleGroups).length} groups from battle`);
-        
+
         for (const groupId in allBattleGroups) {
           const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-          
+
           // Skip updates for groups that are being deleted to avoid path conflicts
           if (groupsToBeDeleted && groupsToBeDeleted.has(groupPath)) {
             console.log(`Skipping updates for deleted group: ${groupId}`);
             continue;
           }
-          
+
           if (tile.groups[groupId]) {
             console.log(`Cleaning up battle status for group ${groupId}`);
             // Reset group status for all groups still in battle on winning side.
-            updates[`${groupPath}/battleId`] = null;
-            updates[`${groupPath}/battleSide`] = null;
-            updates[`${groupPath}/battleRole`] = null;
-            updates[`${groupPath}/status`] = 'idle';
+            ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleId`, null);
+            ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleSide`, null);
+            ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.battleRole`, null);
+            ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
           }
         }
       }
-      
+
       // Clean up structure if involved
       if (tile && tile.structure && battle.targetTypes && battle.targetTypes.includes('structure')) {
         // If attackers won, check if structure will be destroyed
@@ -823,24 +783,24 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           const structure = tile.structure;
           const structureType = structure.type;
           const structureDurability = STRUCTURES[structureType]?.durability || 100;
-          
+
           // Log structure state before damage calculation
           console.log(`STRUCTURE BATTLE: ${structureType} with durability ${structureDurability}`);
-          
+
           // IMPROVED: Better handling of undefined structure health
           // If health property doesn't exist, treat as full health without writing to DB yet
-          const currentHealth = structure.health !== undefined ? 
-              structure.health : 
+          const currentHealth = structure.health !== undefined ?
+              structure.health :
               structureDurability;
-              
+
           console.log(`Current structure health: ${currentHealth} (${structure.health !== undefined ? 'from database' : 'at full health - not saved yet'})`);
-          
+
           // Calculate proportional damage based on attacker power
           // Get total units in attacking side
           const attackingGroups = battle.side1.groups || {};
           let totalAttackerPower = 0;
           let totalAttackers = 0;
-          
+
           for (const groupId in attackingGroups) {
             if (tile.groups[groupId]) {
               const group = tile.groups[groupId];
@@ -849,16 +809,16 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               totalAttackerPower += groupPowers[groupId] || 0;
             }
           }
-          
+
           // Calculate damage - base damage is 10% of structure durability, modified by attacker power
           const baseDamage = Math.round(structureDurability * 0.10);  // Reduced from 15% to 10%
-          
+
           // IMPROVED SCALING: Better scaling for very large attacking forces
           // Old formula: const powerFactor = Math.min(2, Math.max(0.5, totalAttackerPower / 10));
           // New formula uses logarithmic scaling to handle large numbers better
           const powerRatio = totalAttackerPower / structureDurability;
           let powerFactor;
-          
+
           if (powerRatio <= 1) {
             // For small forces (power <= structure durability), use original scaling
             powerFactor = Math.max(0.5, powerRatio);
@@ -867,91 +827,90 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             // This gives diminishing returns but still rewards larger forces
             powerFactor = 1 + Math.log10(powerRatio);
           }
-          
+
           // Cap the maximum factor for balance, but much higher than before for massive forces
           powerFactor = Math.min(5, powerFactor);
-          
+
           console.log(`Power ratio: ${powerRatio}, calculated power factor: ${powerFactor}`);
           let damageAmount = Math.round(baseDamage * powerFactor);
-          
+
           // Adjust damage cap based on attacker power relative to structure
           // Very large forces can do more than 25% damage per tick
           let maxDamagePercentage = 0.25; // Default 25%
-          
+
           if (powerRatio > 3) {
             // Formula: 25% + additional % based on power ratio, capped at 75%
             maxDamagePercentage = Math.min(0.75, 0.25 + (powerRatio - 3) * 0.05);
             console.log(`Increased damage cap to ${Math.round(maxDamagePercentage * 100)}% due to overwhelming force`);
           }
-          
+
           const maxDamagePerTick = Math.round(structureDurability * maxDamagePercentage);
-          
+
           if (damageAmount > maxDamagePerTick) {
             console.log(`Damage capped from ${damageAmount} to ${maxDamagePerTick} to prevent excessive damage`);
             damageAmount = maxDamagePerTick;
           }
-          
+
           console.log(`Structure taking ${damageAmount} damage from attackers: ${totalAttackers} units with power ${totalAttackerPower}`);
-          
+
           const newHealth = currentHealth - damageAmount;
           console.log(`Structure health reduced from ${currentHealth} to ${newHealth}`);
-          
+
           // Check if the structure should be destroyed - minimum 2 ticks for any structure
           if (newHealth <= 0 && tickCount > 1) {
               // Flag that structure will be destroyed
               willDestroyStructure = true;
-              
+
               // Structure is destroyed
-              updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`] = null;
-              
+              ops.chunk(worldId, chunkKey, `${tileKey}.structure`, null);
+
               // Handle players on the destroyed structure
               if (tile.players) {
                 const now = Date.now();
                 const playersCount = Object.keys(tile.players).length;
                 let killedPlayersCount = 0;
                 const killedPlayerNames = [];
-                
+
                 console.log(`Structure destroyed - checking ${playersCount} players on tile`);
-                
+
                 // Process each player on the tile where structure was destroyed
                 Object.entries(tile.players).forEach(([playerId, playerData]) => {
                   // Set alive status to false
-                  updates[`players/${playerId}/worlds/${worldId}/alive`] = false;
-                  
+                  ops.player(playerId, worldId, 'alive', false);
+
                   // Clear their group reference
-                  updates[`players/${playerId}/worlds/${worldId}/inGroup`] = null;
-                  
+                  ops.player(playerId, worldId, 'inGroup', null);
+
                   // Add a death message to the player's record
-                  updates[`players/${playerId}/worlds/${worldId}/lastMessage`] = {
+                  ops.player(playerId, worldId, 'lastMessage', {
                     text: "Died in structure destruction",
                     timestamp: now
-                  };
-                  
+                  });
+
                   // CRITICAL FIX: Mark lastLocation with death info instead of removing it
                   // This maintains the death location for history purposes
-                  updates[`players/${playerId}/worlds/${worldId}/lastLocation`] = null;
-                  
+                  ops.player(playerId, worldId, 'lastLocation', null);
+
                   // CRITICAL FIX: Remove player from the tile
-                  updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/players/${playerId}`] = null;
-                  
+                  ops.chunk(worldId, chunkKey, `${tileKey}.players.${playerId}`, null);
+
                   killedPlayersCount++;
                   if (playerData.displayName) {
                     killedPlayerNames.push(playerData.displayName);
                   }
-                  
+
                   console.log(`Player ${playerId} (${playerData.displayName || 'unknown'}) marked as dead after structure destruction`);
                 });
-                
+
                 // Create a single chat message for the structure destruction and all player deaths
                 const structureName = structure.name || `${structureType.charAt(0).toUpperCase() + structureType.slice(1)}`;
                 let deathMessage = `${structureName} at (${battle.locationX}, ${battle.locationY}) has been destroyed!`;
-                
+
                 if (killedPlayersCount > 0) {
                   deathMessage += ` ${killedPlayersCount} player${killedPlayersCount !== 1 ? 's' : ''} perished in the destruction.`;
                 }
-                
-                const chatMessageId = `structure_destroyed_${battle.locationX},${battle.locationY}`;
-                updates[`worlds/${worldId}/chat/${chatMessageId}`] = {
+
+                ops.chat(worldId, {
                   text: deathMessage,
                   type: 'event',
                   timestamp: now,
@@ -959,38 +918,36 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                     x: battle.locationX,
                     y: battle.locationY
                   }
-                };
+                });
               }
           } else if (newHealth <= 0) {
             // Structure critically damaged but not destroyed in first tick
             console.log(`Structure critically damaged but prevented from destruction in first tick`);
-            updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/health`] = 1;
-            
+            ops.chunk(worldId, chunkKey, `${tileKey}.structure.health`, 1);
+
             // Create a message about critical damage
             const structureName = structure.name || `${structureType.charAt(0).toUpperCase() + structureType.slice(1)}`;
             const now = Date.now();
-            const chatMessageId = `structure_critical_${now}`;
-            updates[`worlds/${worldId}/chat/${chatMessageId}`] = {
+            ops.chat(worldId, {
               text: `${structureName} at (${battle.locationX}, ${battle.locationY}) is critically damaged!`,
               type: 'event',
               timestamp: now,
               location: {
-                x: battle.locationX, 
+                x: battle.locationX,
                 y: battle.locationY
               }
-            };
+            });
           } else {
             // Structure survives with reduced health
             // Only write health to DB if it's changed from full health
             if (newHealth < structureDurability || structure.health !== undefined) {
-                updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/health`] = newHealth;
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.health`, newHealth);
             }
-            
+
             // Create a message about structure damage
             const structureName = structure.name || `${structureType.charAt(0).toUpperCase() + structureType.slice(1)}`;
             const now = Date.now();
-            const chatMessageId = `structure_damaged_${now}`;
-            updates[`worlds/${worldId}/chat/${chatMessageId}`] = {
+            ops.chat(worldId, {
               text: `${structureName} at (${battle.locationX}, ${battle.locationY}) has been damaged! (Health: ${newHealth})`,
               type: 'event',
               timestamp: now,
@@ -998,33 +955,24 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                 x: battle.locationX,
                 y: battle.locationY
               }
-            };
+            });
           }
         }
-        
+
         // Only update battleId if we're not destroying the entire structure
         // This prevents path conflict in Firebase updates
         if (!willDestroyStructure) {
           // Remove battle status from structure
-          updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/battleId`] = null;
+          ops.chunk(worldId, chunkKey, `${tileKey}.structure.battleId`, null);
         }
       }
 
-      // CRITICAL FIX: Remove any updates that are children of the battle path since we're deleting the entire battle
-      const battlePathPrefix = `${basePath}/`;
-      Object.keys(updates).forEach(key => {
-        if (key.startsWith(battlePathPrefix)) {
-          console.log(`Removing redundant update to ${key} since parent battle is being deleted`);
-          delete updates[key];
-        }
-      });
-      
-      // Delete the battle as the last step to avoid conflicts
-      updates[basePath] = null;
-      
+      // Setting battle to null automatically removes all child operations (handled in Ops.chunk)
+      ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}`, null);
+
       console.log(`Battle ${battleId} cleanup complete`);
     }
-    
+
     return true;
   } catch (error) {
     console.error(`Error processing battle ${battleId}:`, error);
@@ -1035,7 +983,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
 // Helper function to get critical hits from player units with enhanced info for multi-player PvP
 function getPvPCriticalHits(battle) {
   const criticalHits = [];
-  
+
   // Helper to find player name by ID
   const findPlayerName = (sideObj, targetId) => {
     for (const groupId in sideObj.groups || {}) {
@@ -1049,7 +997,7 @@ function getPvPCriticalHits(battle) {
     }
     return null;
   };
-  
+
   // Check side 1
   for (const groupId in battle.side1.groups || {}) {
     const group = battle.side1.groups[groupId];
@@ -1057,10 +1005,10 @@ function getPvPCriticalHits(battle) {
       for (const unitId in group.units) {
         const unit = group.units[unitId];
         if (unit.type === 'player' && unit.criticalHit === true) {
-          const targetName = unit.targetId ? 
-            findPlayerName(battle.side2, unit.targetId) : 
+          const targetName = unit.targetId ?
+            findPlayerName(battle.side2, unit.targetId) :
             null;
-          
+
           criticalHits.push({
             playerName: unit.displayName || "Unknown Player",
             targetName: targetName,
@@ -1072,7 +1020,7 @@ function getPvPCriticalHits(battle) {
       }
     }
   }
-  
+
   // Check side 2
   for (const groupId in battle.side2.groups || {}) {
     const group = battle.side2.groups[groupId];
@@ -1080,10 +1028,10 @@ function getPvPCriticalHits(battle) {
       for (const unitId in group.units) {
         const unit = group.units[unitId];
         if (unit.type === 'player' && unit.criticalHit === true) {
-          const targetName = unit.targetId ? 
-            findPlayerName(battle.side1, unit.targetId) : 
+          const targetName = unit.targetId ?
+            findPlayerName(battle.side1, unit.targetId) :
             null;
-          
+
           criticalHits.push({
             playerName: unit.displayName || "Unknown Player",
             targetName: targetName,
@@ -1095,14 +1043,14 @@ function getPvPCriticalHits(battle) {
       }
     }
   }
-  
+
   return criticalHits;
 }
 
 // Helper function to check if any player in a side landed a critical hit
 function checkSideForCriticalHits(side) {
   if (!side || !side.groups) return false;
-  
+
   for (const groupId in side.groups) {
     const group = side.groups[groupId];
     if (group?.units) {
@@ -1114,6 +1062,6 @@ function checkSideForCriticalHits(side) {
       }
     }
   }
-  
+
   return false;
 }

@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function attack({ uid, data, db }) {
   const { worldId, attackerGroupIds, defenderGroupIds, structureId, locationX, locationY } = data;
@@ -12,14 +12,13 @@ export async function attack({ uid, data, db }) {
   if (locationX === undefined || locationY === undefined) throw err(400, 'Must provide location coordinates');
   if (!defenderGroupIds?.length && !structureId)   throw err(400, 'Must provide at least one target');
 
-  const chunkKey   = getChunkKey(locationX, locationY);
+  const chunkKey    = getChunkKey(locationX, locationY);
   const locationKey = `${locationX},${locationY}`;
 
   const chunkDoc = await db.collection('chunks').findOne({ worldId, chunkKey });
   const tile     = chunkDoc?.tiles?.[locationKey] || {};
   const groups   = tile.groups || {};
 
-  // Validate attacker groups
   const attackerGroups = [];
   for (const gid of attackerGroupIds) {
     const g = groups[gid];
@@ -29,7 +28,6 @@ export async function attack({ uid, data, db }) {
     attackerGroups.push({ ...g, id: gid });
   }
 
-  // Validate defender groups
   const defenderGroups = [];
   for (const gid of (defenderGroupIds || [])) {
     const g = groups[gid];
@@ -41,7 +39,6 @@ export async function attack({ uid, data, db }) {
     defenderGroups.push({ ...g, id: gid });
   }
 
-  // Validate structure target
   let structure = null;
   if (structureId) {
     if (!tile.structure || tile.structure.id !== structureId) throw err(404, 'Structure not found');
@@ -74,50 +71,49 @@ export async function attack({ uid, data, db }) {
   };
   if (structure) battleData.structureId = structure.id;
 
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${locationKey}/battles/${battleId}`]: battleData,
-    [`worlds/${worldId}/chat/battle_start_${now}_${battleId}`]: {
-      text: `Battle has begun at (${locationX}, ${locationY})! ${battleData.side1.name} is attacking ${battleData.side2.name}!`,
-      type: 'event', timestamp: now, location: { x: locationX, y: locationY }
-    }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${locationKey}.battles.${battleId}`, battleData);
+  ops.chat(worldId, {
+    text: `Battle has begun at (${locationX}, ${locationY})! ${battleData.side1.name} is attacking ${battleData.side2.name}!`,
+    type: 'event', timestamp: now, location: { x: locationX, y: locationY }
+  });
 
   for (const g of attackerGroups) {
-    const base = `worlds/${worldId}/chunks/${chunkKey}/${locationKey}/groups/${g.id}`;
-    updates[`${base}/battleId`]   = battleId;
-    updates[`${base}/battleSide`] = 1;
-    updates[`${base}/battleRole`] = 'attacker';
-    updates[`${base}/status`]     = 'fighting';
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleId`,   battleId);
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleSide`, 1);
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleRole`, 'attacker');
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.status`,     'fighting');
   }
 
   for (const g of defenderGroups) {
-    const base = `worlds/${worldId}/chunks/${chunkKey}/${locationKey}/groups/${g.id}`;
-    updates[`${base}/battleId`]   = battleId;
-    updates[`${base}/battleSide`] = 2;
-    updates[`${base}/battleRole`] = 'defender';
-    updates[`${base}/status`]     = 'fighting';
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleId`,   battleId);
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleSide`, 2);
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.battleRole`, 'defender');
+    ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.status`,     'fighting');
     if (g.status === 'moving') {
-      updates[`${base}/movementPath`] = null; updates[`${base}/pathIndex`] = null;
-      updates[`${base}/moveStarted`]  = null; updates[`${base}/moveSpeed`]  = null;
-      updates[`${base}/nextMoveTime`] = null;
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.movementPath`, null);
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.pathIndex`,    null);
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.moveStarted`,  null);
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.moveSpeed`,    null);
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.nextMoveTime`, null);
     }
     if (g.status === 'gathering') {
-      updates[`${base}/gatheringBiome`] = null;
-      updates[`${base}/gatheringTicksRemaining`] = null;
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.gatheringBiome`,         null);
+      ops.chunk(worldId, chunkKey, `${locationKey}.groups.${g.id}.gatheringTicksRemaining`, null);
     }
   }
 
   if (structure) {
-    updates[`worlds/${worldId}/chunks/${chunkKey}/${locationKey}/structure/battleId`] = battleId;
+    ops.chunk(worldId, chunkKey, `${locationKey}.structure.battleId`, battleId);
   }
 
   if (attackerGroups.length) {
     const ownerId = attackerGroups[0].owner;
-    updates[`players/${ownerId}/worlds/${worldId}/achievements/first_attack`]      = true;
-    updates[`players/${ownerId}/worlds/${worldId}/achievements/first_attack_date`] = now;
+    ops.player(ownerId, worldId, 'achievements.first_attack',      true);
+    ops.player(ownerId, worldId, 'achievements.first_attack_date', now);
   }
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, message: 'Attack started successfully', battleId };
 }
 

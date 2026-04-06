@@ -1,6 +1,6 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Units } from 'gisaima-shared/units/units.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function recruitUnits({ uid, data, db }) {
   const { structureId, x, y, worldId, unitType, quantity, cost } = data;
@@ -81,20 +81,16 @@ export async function recruitUnits({ uid, data, db }) {
     }
   }
 
-  const structPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`;
-  const chatId     = `recruit_${now}_${Math.floor(Math.random() * 1000)}`;
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.recruitmentQueue.${recruitmentId}`, recruitmentData);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.banks.${uid}`,                      updatedBank);
+  ops.chat(worldId, {
+    text: `${quantity} ${unitDef.name} units being recruited at (${x}, ${y})`,
+    type: 'event', timestamp: now, location: { x, y }
+  });
+  if (isOwned) ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, updatedShared);
 
-  const updates = {
-    [`${structPath}/recruitmentQueue/${recruitmentId}`]: recruitmentData,
-    [`${structPath}/banks/${uid}`]:                      updatedBank,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      text: `${quantity} ${unitDef.name} units being recruited at (${x}, ${y})`,
-      type: 'event', timestamp: now, location: { x, y }
-    }
-  };
-  if (isOwned) updates[`${structPath}/items`] = updatedShared;
-
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   const playerDoc = await db.collection('players').findOne({ _id: uid });
   if (!playerDoc?.worlds?.[worldId]?.achievements?.first_recruit) {

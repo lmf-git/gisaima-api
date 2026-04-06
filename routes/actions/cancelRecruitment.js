@@ -1,5 +1,5 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function cancelRecruitment({ uid, data, db }) {
   const { recruitmentId, structureId, x, y, worldId } = data;
@@ -32,13 +32,11 @@ export async function cancelRecruitment({ uid, data, db }) {
     bank[key] = (bank[key] || 0) + refund;
   }
 
-  const structPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`;
-  const updates = {
-    [`${structPath}/recruitmentQueue/${recruitmentId}`]: null,
-    [`${structPath}/banks/${uid}`]: bank
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.recruitmentQueue.${recruitmentId}`, null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.banks.${uid}`, bank);
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, refunds, refundPercent: refundPct };
 }
 

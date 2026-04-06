@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function flee({ uid, data, db }) {
   const { groupId, x, y, worldId = 'default' } = data;
@@ -25,33 +25,29 @@ export async function flee({ uid, data, db }) {
   const battle = tile.battles?.[group.battleId];
   if (!battle) throw err(404, 'Associated battle not found');
 
-  const now            = Date.now();
-  const currentTick    = battle.tickCount || 0;
-  const chatId         = `battle_flee_${now}_${groupId}`;
-  const groupPath      = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-  const battlePath     = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/battles/${group.battleId}`;
+  const now         = Date.now();
+  const currentTick = battle.tickCount || 0;
 
-  const updates = {
-    [`${groupPath}/status`]:              'fleeing',
-    [`${groupPath}/fleeTickRequested`]:   currentTick,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      text: `${group.name || 'A group'} is attempting to flee from battle at (${x}, ${y})!`,
-      type: 'event',
-      timestamp: now,
-      tickCount: currentTick,
-      location: { x, y }
-    },
-    [`${battlePath}/events`]: [
-      ...(battle.events || []),
-      {
-        type: 'flee_attempt', tickCount: currentTick,
-        text: `${group.name || 'A group'} is attempting to flee from the battle!`,
-        groupId, side: group.battleSide
-      }
-    ]
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,            'fleeing');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.fleeTickRequested`, currentTick);
+  ops.chat(worldId, {
+    text: `${group.name || 'A group'} is attempting to flee from battle at (${x}, ${y})!`,
+    type: 'event',
+    timestamp: now,
+    tickCount: currentTick,
+    location: { x, y }
+  });
+  ops.chunk(worldId, chunkKey, `${tileKey}.battles.${group.battleId}.events`, [
+    ...(battle.events || []),
+    {
+      type: 'flee_attempt', tickCount: currentTick,
+      text: `${group.name || 'A group'} is attempting to flee from the battle!`,
+      groupId, side: group.battleSide
+    }
+  ]);
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   return {
     success: true,

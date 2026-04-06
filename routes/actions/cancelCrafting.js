@@ -1,4 +1,4 @@
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function cancelCrafting({ uid, data, db }) {
   const { worldId, craftingId } = data;
@@ -27,21 +27,20 @@ export async function cancelCrafting({ uid, data, db }) {
     else updatedInv.push({ name: matName, quantity: refund, type: 'resource' });
   }
 
-  const updates = {
-    [`worlds/${worldId}/crafting/${craftingId}/status`]:     'canceled',
-    [`worlds/${worldId}/crafting/${craftingId}/canceledAt`]: now,
-    [`worlds/${worldId}/crafting/${craftingId}/processed`]:  true,
-    [`players/${uid}/worlds/${worldId}/crafting/current`]:   null,
-    [`players/${uid}/worlds/${worldId}/crafting/completesAt`]: null,
-    [`players/${uid}/worlds/${worldId}/inventory`]:           updatedInv,
-    [`worlds/${worldId}/chat/cancel_crafting_${craftingId}`]: {
-      location: crafting.structureLocation,
-      text: `${crafting.playerName} canceled crafting ${crafting.result.name}.`,
-      timestamp: now, type: 'event'
-    }
-  };
+  const ops = new Ops();
+  ops.world(worldId, `crafting.${craftingId}.status`,     'canceled');
+  ops.world(worldId, `crafting.${craftingId}.canceledAt`, now);
+  ops.world(worldId, `crafting.${craftingId}.processed`,  true);
+  ops.player(uid, worldId, 'crafting.current',     null);
+  ops.player(uid, worldId, 'crafting.completesAt', null);
+  ops.player(uid, worldId, 'inventory',            updatedInv);
+  ops.chat(worldId, {
+    location: crafting.structureLocation,
+    text: `${crafting.playerName} canceled crafting ${crafting.result.name}.`,
+    timestamp: now, type: 'event'
+  });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true };
 }
 

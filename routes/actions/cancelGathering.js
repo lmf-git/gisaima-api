@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function cancelGathering({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId } = data;
@@ -25,25 +25,21 @@ export async function cancelGathering({ uid, data, db }) {
     return { success: true, message: 'Group is not gathering', status: group.status };
   }
 
-  const now    = Date.now();
-  const chatId = `gather_cancel_${now}_${groupId}`;
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
+  const now = Date.now();
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'idle');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, null);
+  ops.chat(worldId, {
+    text: `${group.name || 'Unnamed group'} has stopped gathering resources at (${locationX},${locationY})`,
+    type: 'event',
+    timestamp: now,
+    userId: uid,
+    userName: group.ownerName || group.name || 'Unknown',
+    location: { x: Number(locationX), y: Number(locationY), timestamp: now }
+  });
 
-  const updates = {
-    [`${groupPath}/status`]:                 'idle',
-    [`${groupPath}/gatheringBiome`]:         null,
-    [`${groupPath}/gatheringTicksRemaining`]: null,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      text: `${group.name || 'Unnamed group'} has stopped gathering resources at (${locationX},${locationY})`,
-      type: 'event',
-      timestamp: now,
-      userId: uid,
-      userName: group.ownerName || group.name || 'Unknown',
-      location: { x: Number(locationX), y: Number(locationY), timestamp: now }
-    }
-  };
-
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   return { success: true, message: 'Gathering cancelled successfully', timestamp: now };
 }

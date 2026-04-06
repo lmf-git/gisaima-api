@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function cancelMovement({ uid, data, db }) {
   const { worldId, groupId, x, y } = data;
@@ -25,28 +25,24 @@ export async function cancelMovement({ uid, data, db }) {
     return { success: true, message: 'Group is not moving', status: group.status };
   }
 
-  const now       = Date.now();
-  const chatId    = `move_cancel_${now}_${groupId}`;
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
+  const now = Date.now();
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'idle');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
+  ops.chat(worldId, {
+    text: `${group.name || 'Unnamed group'} has stopped their journey at (${x},${y})`,
+    type: 'event',
+    timestamp: now,
+    userId: uid,
+    userName: group.name || 'Unknown',
+    location: { x: Number(x), y: Number(y), timestamp: now }
+  });
 
-  const updates = {
-    [`${groupPath}/status`]:       'idle',
-    [`${groupPath}/movementPath`]: null,
-    [`${groupPath}/pathIndex`]:    null,
-    [`${groupPath}/moveStarted`]:  null,
-    [`${groupPath}/moveSpeed`]:    null,
-    [`${groupPath}/nextMoveTime`]: null,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      text: `${group.name || 'Unnamed group'} has stopped their journey at (${x},${y})`,
-      type: 'event',
-      timestamp: now,
-      userId: uid,
-      userName: group.name || 'Unknown',
-      location: { x: Number(x), y: Number(y), timestamp: now }
-    }
-  };
-
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   return { success: true, message: 'Movement cancelled successfully', timestamp: now };
 }

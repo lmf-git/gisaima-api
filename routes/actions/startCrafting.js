@@ -1,5 +1,5 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function startCrafting({ uid, data, db }) {
   const { worldId, x, y, recipeId } = data;
@@ -92,19 +92,18 @@ export async function startCrafting({ uid, data, db }) {
     status: 'in_progress', processed: false
   };
 
-  const updates = {
-    [`worlds/${worldId}/crafting/${craftingId}`]:             craftingData,
-    [`players/${uid}/worlds/${worldId}/inventory`]:           updatedInv,
-    [`players/${uid}/worlds/${worldId}/crafting/current`]:    craftingId,
-    [`players/${uid}/worlds/${worldId}/crafting/ticksRequired`]: finalTicks,
-    [`worlds/${worldId}/chat/crafting_${craftingId}`]: {
-      location: { x, y },
-      text: `${player.displayName} started crafting ${recipe.result.name}.`,
-      timestamp: now, type: 'event'
-    }
-  };
+  const ops = new Ops();
+  ops.world(worldId, `crafting.${craftingId}`, craftingData);
+  ops.player(uid, worldId, 'inventory',                updatedInv);
+  ops.player(uid, worldId, 'crafting.current',         craftingId);
+  ops.player(uid, worldId, 'crafting.ticksRequired',   finalTicks);
+  ops.chat(worldId, {
+    location: { x, y },
+    text: `${player.displayName} started crafting ${recipe.result.name}.`,
+    timestamp: now, type: 'event'
+  });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, craftingId, ticksRequired: finalTicks, result: craftingData.result };
 }
 

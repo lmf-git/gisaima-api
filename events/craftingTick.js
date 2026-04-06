@@ -2,7 +2,7 @@
  * Crafting tick processing for Gisaima
  */
 
-import { applyUpdates } from '../db/adapter.js';
+import { Ops } from '../lib/ops.js';
 
 export async function processCrafting(worldId, worldData, db) {
   try {
@@ -11,32 +11,32 @@ export async function processCrafting(worldId, worldData, db) {
     if (!craftingData) return { processed: 0 };
 
     let processed = 0;
-    const updates = {};
+    const ops = new Ops();
 
     for (const [craftingId, crafting] of Object.entries(craftingData)) {
       if (crafting.processed || crafting.status !== 'in_progress') continue;
 
       if (typeof crafting.ticksRequired === 'number') {
         if (typeof crafting.ticksCompleted !== 'number') {
-          updates[`worlds/${worldId}/crafting/${craftingId}/ticksCompleted`] = 1;
+          ops.world(worldId, `crafting.${craftingId}.ticksCompleted`, 1);
           continue;
         }
         const newTicks = crafting.ticksCompleted + 1;
-        updates[`worlds/${worldId}/crafting/${craftingId}/ticksCompleted`] = newTicks;
+        ops.world(worldId, `crafting.${craftingId}.ticksCompleted`, newTicks);
         if (newTicks >= crafting.ticksRequired) {
-          completeCrafting(worldId, craftingId, crafting, updates);
+          completeCrafting(worldId, craftingId, crafting, ops, now);
           processed++;
         }
       } else if (crafting.completesAt && crafting.completesAt <= now) {
-        completeCrafting(worldId, craftingId, crafting, updates);
+        completeCrafting(worldId, craftingId, crafting, ops, now);
         processed++;
       } else if (crafting.craftingTime) {
-        updates[`worlds/${worldId}/crafting/${craftingId}/ticksRequired`]   = crafting.craftingTime;
-        updates[`worlds/${worldId}/crafting/${craftingId}/ticksCompleted`]  = 1;
+        ops.world(worldId, `crafting.${craftingId}.ticksRequired`,  crafting.craftingTime);
+        ops.world(worldId, `crafting.${craftingId}.ticksCompleted`, 1);
       }
     }
 
-    if (Object.keys(updates).length > 0) await applyUpdates(db, updates);
+    await ops.flush(db);
     return { processed };
   } catch (err) {
     console.error('Error processing crafting:', err);
@@ -44,32 +44,31 @@ export async function processCrafting(worldId, worldData, db) {
   }
 }
 
-function completeCrafting(worldId, craftingId, crafting, updates) {
-  const now = Date.now();
-  updates[`worlds/${worldId}/crafting/${craftingId}/status`]    = 'completed';
-  updates[`worlds/${worldId}/crafting/${craftingId}/processed`] = true;
+function completeCrafting(worldId, craftingId, crafting, ops, now) {
+  ops.world(worldId, `crafting.${craftingId}.status`,    'completed');
+  ops.world(worldId, `crafting.${craftingId}.processed`, true);
 
   if (crafting.playerId && crafting.result) {
     const newItemId = `item_${now}_${Math.floor(Math.random() * 1000)}`;
-    updates[`players/${crafting.playerId}/worlds/${worldId}/inventory/${newItemId}`] = {
+    ops.player(crafting.playerId, worldId, `inventory.${newItemId}`, {
       ...crafting.result, id: newItemId, craftedAt: now
-    };
+    });
   }
 
   if (crafting.playerId) {
-    updates[`players/${crafting.playerId}/worlds/${worldId}/crafting/current`]     = null;
-    updates[`players/${crafting.playerId}/worlds/${worldId}/crafting/completesAt`] = null;
+    ops.player(crafting.playerId, worldId, 'crafting.current',     null);
+    ops.player(crafting.playerId, worldId, 'crafting.completesAt', null);
     const notifId = `crafting_completed_${craftingId}`;
-    updates[`players/${crafting.playerId}/worlds/${worldId}/notifications/${notifId}`] = {
+    ops.player(crafting.playerId, worldId, `notifications.${notifId}`, {
       id: notifId, type: 'crafting_completed',
       message: `You have completed crafting ${crafting.result?.name}!`,
       craftingId, itemName: crafting.result?.name, read: false
-    };
+    });
   }
 
-  updates[`worlds/${worldId}/chat/crafting_complete_${craftingId}`] = {
+  ops.chat(worldId, {
     location: crafting.structureLocation,
     text: `${crafting.playerName} completed crafting ${crafting.result?.name}.`,
     timestamp: now, type: 'event'
-  };
+  });
 }

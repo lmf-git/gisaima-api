@@ -1,6 +1,6 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function startStructureUpgrade({ uid, data, db }) {
   const { worldId, x, y } = data;
@@ -57,21 +57,20 @@ export async function startStructureUpgrade({ uid, data, db }) {
     bankItems, isOwner ? sharedItems : {}, requiredResources
   );
 
-  const updates = {
-    [`worlds/${worldId}/upgrades/${upgradeId}`]: upgradeData,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/upgradeInProgress`]:  true,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/upgradeId`]:          upgradeId,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/upgradeCompletesAt`]: now + upgradeTimeMs,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/banks/${uid}`]:       updatedBank,
-    [`worlds/${worldId}/chat/upgrade_${upgradeId}`]: {
-      location: { x, y },
-      text: `${player.displayName} started upgrading a ${structure.name || structure.type} from level ${currentLevel} to ${nextLevel}.`,
-      timestamp: now, type: 'event'
-    }
-  };
-  if (isOwner) updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/items`] = updatedShared;
+  const ops = new Ops();
+  ops.world(worldId, `upgrades.${upgradeId}`, upgradeData);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.upgradeInProgress`,  true);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.upgradeId`,          upgradeId);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.upgradeCompletesAt`, now + upgradeTimeMs);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.banks.${uid}`,       updatedBank);
+  ops.chat(worldId, {
+    location: { x, y },
+    text: `${player.displayName} started upgrading a ${structure.name || structure.type} from level ${currentLevel} to ${nextLevel}.`,
+    timestamp: now, type: 'event'
+  });
+  if (isOwner) ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, updatedShared);
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, upgradeId, fromLevel: currentLevel, toLevel: nextLevel, completesAt: now + upgradeTimeMs };
 }
 

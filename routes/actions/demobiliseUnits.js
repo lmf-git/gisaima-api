@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function demobiliseUnits({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId = 'default', storageDestination = 'shared' } = data;
@@ -29,35 +29,32 @@ export async function demobiliseUnits({ uid, data, db }) {
 
   const hasPlayerUnit = Object.values(group.units || {}).some(u => u.type === 'player');
   const now   = Date.now();
-  const chatId = `demob_start_${now}_${groupId}`;
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
   const [chunkXStr, chunkYStr] = chunkKey.split(',');
 
-  const updates = {
-    [`${groupPath}/status`]:              'demobilising',
-    [`${groupPath}/targetStructureId`]:   structure.id,
-    [`${groupPath}/storageDestination`]:  storage,
-    [`${groupPath}/demobilizationData`]: {
-      hasPlayer: hasPlayerUnit,
-      exactLocation: {
-        x: locationX, y: locationY,
-        chunkX: Number(chunkXStr), chunkY: Number(chunkYStr),
-        tileKey, chunkKey
-      }
-    },
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      type: 'system',
-      text: `${group.name || 'Group'} is demobilizing at (${locationX},${locationY})`,
-      timestamp: now,
-      location: { x: locationX, y: locationY }
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,             'demobilising');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.targetStructureId`,  structure.id);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.storageDestination`, storage);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.demobilizationData`, {
+    hasPlayer: hasPlayerUnit,
+    exactLocation: {
+      x: locationX, y: locationY,
+      chunkX: Number(chunkXStr), chunkY: Number(chunkYStr),
+      tileKey, chunkKey
     }
-  };
+  });
+  ops.chat(worldId, {
+    type: 'system',
+    text: `${group.name || 'Group'} is demobilizing at (${locationX},${locationY})`,
+    timestamp: now,
+    location: { x: locationX, y: locationY }
+  });
 
   if (hasPlayerUnit) {
-    updates[`players/${uid}/worlds/${worldId}/lastLocation`] = { x: locationX, y: locationY };
+    ops.player(uid, worldId, 'lastLocation', { x: locationX, y: locationY });
   }
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   return {
     status: 'demobilising',

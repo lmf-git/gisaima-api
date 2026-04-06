@@ -5,7 +5,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 
-export async function processMovement(worldId, updates, group, chunkKey, tileKey, groupId, now, _db, worldInfo = null) {
+export async function processMovement(worldId, ops, group, chunkKey, tileKey, groupId, now, _db, worldInfo = null) {
   if (group.status === 'cancelling') {
     console.log(`Skipping movement for group ${groupId} as it's being cancelled`);
     return false;
@@ -14,13 +14,12 @@ export async function processMovement(worldId, updates, group, chunkKey, tileKey
   if (group.battleId) {
     console.log(`Skipping movement for group ${groupId} as it's in battle`);
     if (group.status === 'moving') {
-      const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-      updates[`${groupPath}/status`]       = 'fighting';
-      updates[`${groupPath}/movementPath`] = null;
-      updates[`${groupPath}/pathIndex`]    = null;
-      updates[`${groupPath}/moveStarted`]  = null;
-      updates[`${groupPath}/moveSpeed`]    = null;
-      updates[`${groupPath}/nextMoveTime`] = null;
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'fighting');
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
     }
     return false;
   }
@@ -29,17 +28,15 @@ export async function processMovement(worldId, updates, group, chunkKey, tileKey
     return false;
   }
 
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-
   if (!group.movementPath || !Array.isArray(group.movementPath) ||
       group.pathIndex === undefined || group.moveStarted === undefined) {
     console.warn(`Invalid path for group ${groupId} in world ${worldId}`);
-    updates[`${groupPath}/status`]       = 'idle';
-    updates[`${groupPath}/movementPath`] = null;
-    updates[`${groupPath}/pathIndex`]    = null;
-    updates[`${groupPath}/moveStarted`]  = null;
-    updates[`${groupPath}/moveSpeed`]    = null;
-    updates[`${groupPath}/nextMoveTime`] = null;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'idle');
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
     return false;
   }
 
@@ -47,23 +44,21 @@ export async function processMovement(worldId, updates, group, chunkKey, tileKey
   const nextIndex    = currentIndex + 1;
 
   if (nextIndex >= group.movementPath.length) {
-    updates[`${groupPath}/status`]       = 'idle';
-    updates[`${groupPath}/movementPath`] = null;
-    updates[`${groupPath}/pathIndex`]    = null;
-    updates[`${groupPath}/moveStarted`]  = null;
-    updates[`${groupPath}/moveSpeed`]    = null;
-    updates[`${groupPath}/nextMoveTime`] = null;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'idle');
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
 
     const startPoint = group.movementPath[0];
     const endPoint   = group.movementPath[group.movementPath.length - 1];
-    const groupName  = group.name || 'Unnamed force';
-    const chatId     = `move_${now}_${groupId}`;
-    updates[`worlds/${worldId}/chat/${chatId}`] = {
-      text: `${groupName} completed their journey from (${startPoint.x},${startPoint.y}) to (${endPoint.x},${endPoint.y})`,
+    ops.chat(worldId, {
+      text: `${group.name || 'Unnamed force'} completed their journey from (${startPoint.x},${startPoint.y}) to (${endPoint.x},${endPoint.y})`,
       type: 'event',
       timestamp: now,
       location: { x: endPoint.x, y: endPoint.y }
-    };
+    });
     return true;
   }
 
@@ -92,38 +87,44 @@ export async function processMovement(worldId, updates, group, chunkKey, tileKey
       }
     }
 
-    updates[`worlds/${worldId}/chunks/${nextChunkKey}/${nextTileKey}/groups/${groupId}`] = updatedGroup;
-    updates[groupPath] = null;
+    // Update passenger coordinates when the boat moves
+    if (updatedGroup.passengers) {
+      for (const [pid, pg] of Object.entries(updatedGroup.passengers)) {
+        updatedGroup.passengers[pid] = { ...pg, x: nextPoint.x, y: nextPoint.y };
+      }
+    }
+
+    ops.chunk(worldId, nextChunkKey, `${nextTileKey}.groups.${groupId}`, updatedGroup);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}`, null);
 
     const isSignificant = nextIndex % 3 === 0 || nextIndex === group.movementPath.length - 1;
     if (isSignificant) {
-      const chatId = `move_${now}_${groupId}_${nextIndex}`;
-      updates[`worlds/${worldId}/chat/${chatId}`] = {
+      ops.chat(worldId, {
         text: `${group.name || 'Unnamed force'} has arrived at (${nextPoint.x},${nextPoint.y})${nextIndex < group.movementPath.length - 1 ? ' and continues their journey' : ''}`,
         type: 'event',
         timestamp: now,
         location: { x: nextPoint.x, y: nextPoint.y }
-      };
+      });
     }
 
     if (group.units) {
       const units = Array.isArray(group.units) ? group.units : Object.values(group.units);
       for (const unit of units) {
         if (unit.type === 'player' && unit.id) {
-          updates[`players/${unit.id}/worlds/${worldId}/lastLocation`] = { x: nextPoint.x, y: nextPoint.y, timestamp: now };
+          ops.player(unit.id, worldId, 'lastLocation', { x: nextPoint.x, y: nextPoint.y, timestamp: now });
         }
       }
     }
   } else {
-    updates[`${groupPath}/pathIndex`]    = nextIndex;
-    updates[`${groupPath}/nextMoveTime`] = nextMoveTime;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    nextIndex);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, nextMoveTime);
     if (nextIndex === group.movementPath.length - 1) {
-      updates[`${groupPath}/status`]       = 'idle';
-      updates[`${groupPath}/moveStarted`]  = null;
-      updates[`${groupPath}/moveSpeed`]    = null;
-      updates[`${groupPath}/movementPath`] = null;
-      updates[`${groupPath}/pathIndex`]    = null;
-      updates[`${groupPath}/nextMoveTime`] = null;
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'idle');
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`,  null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
     }
   }
 

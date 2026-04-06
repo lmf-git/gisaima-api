@@ -5,7 +5,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { STRUCTURES } from 'gisaima-shared/definitions/STRUCTURES.js';
 import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function buildStructure({ uid, data, db }) {
   const { worldId, groupId, tileX, tileY, structureType, structureName } = data;
@@ -58,27 +58,25 @@ export async function buildStructure({ uid, data, db }) {
 
   const now      = Date.now();
   const structId = `structure_${now}_${Math.floor(Math.random() * 10000)}`;
-  const chatId   = `chat_${now}_${Math.floor(Math.random() * 1000)}`;
 
   const playerDoc = await db.collection('players').findOne({ _id: uid });
   const ownerName = playerDoc?.worlds?.[worldId]?.displayName || 'Unknown';
 
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`]: {
-      id: structId, name: structureName, type: structureType,
-      status: 'building', buildProgress: 0,
-      owner: uid, ownerName, race: group.race || null, builder: groupId
-    },
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/status`]: 'building',
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/items`]:  updatedItems,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      type: 'system',
-      text: `${structureName} construction has begun at (${tileX},${tileY})`,
-      timestamp: now, location: { x: tileX, y: tileY }
-    }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure`, {
+    id: structId, name: structureName, type: structureType,
+    status: 'building', buildProgress: 0,
+    owner: uid, ownerName, race: group.race || null, builder: groupId
+  });
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'building');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`,  updatedItems);
+  ops.chat(worldId, {
+    type: 'system',
+    text: `${structureName} construction has begun at (${tileX},${tileY})`,
+    timestamp: now, location: { x: tileX, y: tileY }
+  });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, structure: structureType };
 }
 

@@ -1,14 +1,14 @@
-import { applyUpdates } from '../db/adapter.js';
+import { Ops } from '../lib/ops.js';
 /**
  * Monster Strategy processing for Gisaima
  * Handles monster group AI behavior for movement, gathering, building, etc.
  */
 
 import { calculateDistance, moveMonsterTowardsTarget, shouldInterruptMovement } from '../monsters/strategy/movement.js';
-import { 
-  findPlayerGroupsOnTile, 
-  initiateAttackOnPlayers, 
-  initiateAttackOnStructure, 
+import {
+  findPlayerGroupsOnTile,
+  initiateAttackOnPlayers,
+  initiateAttackOnStructure,
   joinExistingBattle,
   findMergeableMonsterGroups,
   mergeMonsterGroupsOnTile,
@@ -17,8 +17,8 @@ import {
 } from '../monsters/strategy/combat.mjs';
 import { startMonsterGathering, countTotalResources } from '../monsters/strategy/resources.mjs';
 import { MONSTER_PERSONALITIES, shouldChangePersonality, getRandomPersonality } from 'gisaima-shared/definitions/MONSTER_PERSONALITIES.js';
-import { 
-  isMonsterGroup, 
+import {
+  isMonsterGroup,
   isAvailableForAction,
   scanWorldMap,
   isSuitableForMonsterBuilding,
@@ -26,9 +26,9 @@ import {
   isWaterTile
 } from '../monsters/_monsters.mjs';
 
-import { 
-  buildMonsterStructure, 
-  upgradeMonsterStructure, 
+import {
+  buildMonsterStructure,
+  upgradeMonsterStructure,
   demobilizeAtMonsterStructure,
   addOrUpgradeMonsterBuilding
 } from '../monsters/strategy/building.js';
@@ -56,7 +56,7 @@ export { isMonsterGroup, isAvailableForAction };
 export async function processMonsterStrategies(worldId, chunks, terrainGenerator, db) {
   // db received as parameter
   const now = Date.now();
-  
+
   // Track results for reporting
   const results = {
     movesInitiated: 0,
@@ -72,43 +72,43 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
     totalProcessed: 0,
     errors: 0 // Add an error counter
   };
-  
+
   try {
     console.log(`Processing monster strategies for world ${worldId}`);
-    
+
     // Ensure chunks exists before scanning but don't try to fetch it
     if (!chunks) {
       console.error(`No chunks data provided for world ${worldId} in processMonsterStrategies`);
       return results;
     }
-    
+
     // Preparation: scan the world for key locations (player spawns, resources, etc)
     const worldScan = scanWorldMap(chunks);
-    
+
     console.log(`World scan complete. Found: ${worldScan.playerSpawns.length} player spawns, ` +
-                `${worldScan.monsterStructures.length} monster structures, ` + 
+                `${worldScan.monsterStructures.length} monster structures, ` +
                 `${worldScan.resourceHotspots.length} resource hotspots`);
-    
+
     // Process all chunks - we'll use a batched update approach for efficiency
-    const updates = {};
-    
+    const ops = new Ops();
+
     // NEW: Add tracking for monsters already processed in this tick
     // This prevents race conditions where multiple monsters take conflicting actions
     const processedMonsters = new Set();
     const reservedForCombat = new Set(); // Track monsters that will be in combat
     const pendingBattles = {}; // Track battles being created in this tick
-    
+
     // NEW: First process aggressive monsters, then others - prioritizes combat
     const allMonsterGroups = [];
-    
+
     // Scan each chunk for monster groups and collect them
     for (const [chunkKey, chunkData] of Object.entries(chunks)) {
       if (!chunkData) continue;
-      
+
       // Process each tile in the chunk
       for (const [tileKey, tileData] of Object.entries(chunkData)) {
         if (!tileData || !tileData.groups) continue;
-        
+
         // Find monster groups on this tile
         for (const [groupId, groupData] of Object.entries(tileData.groups)) {
           if (isMonsterGroup(groupData) && isAvailableForAction(groupData)) {
@@ -122,83 +122,83 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
                 y: parseInt(tileKey.split(',')[1])
               },
               // Determine if this is an aggressive monster
-              isAggressive: groupData.personality?.id === 'AGGRESSIVE' || 
+              isAggressive: groupData.personality?.id === 'AGGRESSIVE' ||
                           groupData.personality?.id === 'FERAL'
             });
           }
         }
       }
     }
-    
+
     // Sort monster groups to process aggressive ones first
     allMonsterGroups.sort((a, b) => {
       // Sort by aggression (aggressive first)
       if (a.isAggressive !== b.isAggressive) {
         return a.isAggressive ? -1 : 1;
       }
-      
+
       // Then by unit count (stronger first)
       const aUnits = a.units ? Object.keys(a.units).length : 0;
       const bUnits = b.units ? Object.keys(b.units).length : 0;
       return bUnits - aUnits;
     });
-    
+
     // Process each monster group in prioritized order
     for (const monsterGroup of allMonsterGroups) {
       // Only process a percentage of monster groups each tick to avoid too much activity
       if (Math.random() > STRATEGY_CHANCE) continue;
-      
+
       const groupId = monsterGroup.id;
       const chunkKey = monsterGroup.chunkKey;
       const tileKey = monsterGroup.tileKey;
       const location = monsterGroup.location;
-      
+
       // Skip if this monster has already been processed
       if (processedMonsters.has(`${chunkKey}_${tileKey}_${groupId}`)) {
         continue;
       }
-      
+
       // Skip groups that have been reserved for combat
       if (reservedForCombat.has(`${chunkKey}_${tileKey}_${groupId}`)) {
         continue;
       }
-      
+
       // Get the current tile data
       const tileData = chunks[chunkKey]?.[tileKey];
       if (!tileData) continue;
-      
+
       // NEW: Add metadata to monsterGroup object to track action conflicts
       monsterGroup.combatReserved = false;
-      
+
       try {
         // Execute strategy and get result
         const result = await executeMonsterStrategy(
-          db, worldId, monsterGroup, location, tileData, worldScan, 
-          updates, now, chunks, terrainGenerator,
-          { 
-            processedMonsters, 
-            reservedForCombat, 
-            pendingBattles 
+          db, worldId, monsterGroup, location, tileData, worldScan,
+          ops, now, chunks, terrainGenerator,
+          {
+            processedMonsters,
+            reservedForCombat,
+            pendingBattles
           }
         );
-        
+
         // Mark this monster as processed
         processedMonsters.add(`${chunkKey}_${tileKey}_${groupId}`);
-        
+
         // Safely check result - add defensive check for undefined result
         if (!result) {
           console.warn(`Strategy execution returned undefined for monster group ${groupId}`);
           results.errors++;
           continue; // Skip to next monster group
         }
-        
+
         // If this was a combat action, mark all involved monsters as reserved
         if (result.action === 'attack' && result.targets) {
           // Mark all targets as reserved for combat
           for (const targetId of result.targets) {
             reservedForCombat.add(`${chunkKey}_${tileKey}_${targetId}`);
           }
-          
+
           // Store battle info for possible joining by other monsters
           if (result.battleId) {
             pendingBattles[`${chunkKey}_${tileKey}`] = pendingBattles[`${chunkKey}_${tileKey}`] || [];
@@ -208,11 +208,11 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
             });
           }
         }
-        
+
         // Track results - add defensive check for action property
         if (result.action) {
           results.totalProcessed++;
-          
+
           switch (result.action) {
             case 'move':
               results.movesInitiated++;
@@ -264,16 +264,13 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
         results.errors++;
       }
     }
-    
-    // Apply all updates in a single batch, but first sanitize them to prevent conflicts
-    if (Object.keys(updates).length > 0) {
-      console.log(`Sanitizing and applying ${Object.keys(updates).length} updates for monster strategies`);
-      const sanitizedUpdates = sanitizeUpdates(updates);
-      await applyUpdates(db, sanitizedUpdates);
-    }
-    
+
+    // Apply all updates in a single batch
+    console.log(`Applying updates for monster strategies`);
+    await ops.flush(db);
+
     return results;
-    
+
   } catch (error) {
     console.error(`Error processing monster strategies for world ${worldId}:`, error);
     return { ...results, error: error.message };
@@ -288,7 +285,7 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
  * @param {Object} location - Location coordinates
  * @param {Object} tileData - Current tile data
  * @param {Object} worldScan - Scanned world data
- * @param {Object} updates - Updates object
+ * @param {Object} ops - Ops instance
  * @param {number} now - Current timestamp
  * @param {Object} chunks - Loaded chunks data
  * @param {Object} terrainGenerator - Terrain generator instance
@@ -296,7 +293,7 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
  * @returns {Object} Action result
  */
 export async function executeMonsterStrategy(
-  db, worldId, monsterGroup, location, tileData, worldScan, updates, now, chunks, terrainGenerator = null,
+  db, worldId, monsterGroup, location, tileData, worldScan, ops, now, chunks, terrainGenerator = null,
   conflictTracking = null // Added conflict tracking parameter
 ) {
   try {
@@ -304,10 +301,7 @@ export async function executeMonsterStrategy(
     const groupId = monsterGroup.id;
     const chunkKey = monsterGroup.chunkKey;
     const tileKey = monsterGroup.tileKey;
-    
-    // Base path for this group
-    const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-    
+
     // Check if this monster was already processed or reserved
     if (conflictTracking) {
       const monsterKey = `${chunkKey}_${tileKey}_${groupId}`;
@@ -318,22 +312,22 @@ export async function executeMonsterStrategy(
         return { action: 'error', reason: 'reserved_for_combat' };
       }
     }
-    
+
     // NEW: Check if monster is currently moving and evaluate potential interruptions
     if (monsterGroup.status === 'moving' && monsterGroup.movementPath) {
       // Check if we should interrupt the current movement based on detected opportunities
       const interruptionCheck = shouldInterruptMovement(monsterGroup, tileData, worldScan, location);
-      
+
       if (interruptionCheck.shouldInterrupt) {
         console.log(`Monster group ${groupId} interrupting movement to ${interruptionCheck.reason} at (${location.x}, ${location.y})`);
-        
+
         // Clear movement data to allow new action
-        updates[`${groupPath}/status`] = 'idle';
-        updates[`${groupPath}/movementPath`] = null;
-        updates[`${groupPath}/pathIndex`] = null;
-        updates[`${groupPath}/moveStarted`] = null;
-        updates[`${groupPath}/moveSpeed`] = null;
-        
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`, null);
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveStarted`, null);
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`, null);
+
         // Update monsterGroup object for the rest of the function to use
         monsterGroup = {
           ...monsterGroup,
@@ -341,50 +335,50 @@ export async function executeMonsterStrategy(
           movementPath: null,
           pathIndex: null
         };
-        
+
         // If there's a specific action to take immediately, handle it
         if (interruptionCheck.immediateAction) {
           if (interruptionCheck.immediateAction === 'attack_players' && interruptionCheck.targets) {
             return await initiateAttackOnPlayers(
-              db, worldId, monsterGroup, interruptionCheck.targets, location, updates, now
+              db, worldId, monsterGroup, interruptionCheck.targets, location, ops, now
             );
           } else if (interruptionCheck.immediateAction === 'attack_structure' && interruptionCheck.structure) {
             return await initiateAttackOnStructure(
-              db, worldId, monsterGroup, interruptionCheck.structure, location, updates, now
+              db, worldId, monsterGroup, interruptionCheck.structure, location, ops, now
             );
           } else if (interruptionCheck.immediateAction === 'attack_monsters' && interruptionCheck.targets) {
             return await initiateAttackOnMonsters(
-              db, worldId, monsterGroup, interruptionCheck.targets, location, updates, now
+              db, worldId, monsterGroup, interruptionCheck.targets, location, ops, now
             );
           } else if (interruptionCheck.immediateAction === 'join_battle') {
-            return await joinExistingBattle(db, worldId, monsterGroup, tileData, updates, now);
+            return await joinExistingBattle(db, worldId, monsterGroup, tileData, ops, now);
           } else if (interruptionCheck.immediateAction === 'move_to_target' && interruptionCheck.targetLocation) {
             return await moveMonsterTowardsTarget(
-              db, worldId, monsterGroup, location, 
+              db, worldId, monsterGroup, location,
               { ...worldScan, targetLocation: interruptionCheck.targetLocation },
-              updates, now, interruptionCheck.targetType || null, monsterGroup.personality, chunks, terrainGenerator
+              ops, now, interruptionCheck.targetType || null, monsterGroup.personality, chunks, terrainGenerator
             );
           }
         }
       }
     }
-    
+
     // Check if monster is in exploration phase using tick counting
-    const inExplorationPhase = monsterGroup.explorationPhase && 
+    const inExplorationPhase = monsterGroup.explorationPhase &&
                            (monsterGroup.explorationTicks && monsterGroup.explorationTicks > 0);
-    
+
     // If this monster group has a targetStructure (from structured mobilization)
     if (monsterGroup.targetStructure) {
       console.log(`Monster group ${groupId} has target structure at (${monsterGroup.targetStructure.x}, ${monsterGroup.targetStructure.y})`);
-      
+
       // Check if target structure is on a water tile and monster can't traverse water
       let isTargetWater = false;
-      
+
       // Use TerrainGenerator if available
       if (terrainGenerator && !canTraverseWater(monsterGroup)) {
         // Use coordinates instead of tile data
         isTargetWater = isWaterTile(
-          monsterGroup.targetStructure.x, 
+          monsterGroup.targetStructure.x,
           monsterGroup.targetStructure.y,
           terrainGenerator
         );
@@ -393,46 +387,46 @@ export async function executeMonsterStrategy(
       else if (chunks && !canTraverseWater(monsterGroup)) {
         const targetChunkKey = getChunkKey(monsterGroup.targetStructure.x, monsterGroup.targetStructure.y);
         const targetTileKey = `${monsterGroup.targetStructure.x},${monsterGroup.targetStructure.y}`;
-        
+
         if (chunks[targetChunkKey] && chunks[targetChunkKey][targetTileKey]) {
           const targetTileData = chunks[targetChunkKey][targetTileKey];
           // Direct check for water property
           isTargetWater = targetTileData.biome?.water === true;
         }
       }
-      
+
       if (isTargetWater) {
         // Reset target structure if it's on water and we can't reach it
         console.log(`Monster group ${groupId} cannot reach target structure - it's on a water tile`);
-        updates[`${groupPath}/targetStructure`] = null;
-        
+        ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.targetStructure`, null);
+
         // Move to a different target instead
         return await moveMonsterTowardsTarget(
-          db, worldId, monsterGroup, location, worldScan, updates, now, null, monsterGroup.personality, chunks, terrainGenerator
+          db, worldId, monsterGroup, location, worldScan, ops, now, null, monsterGroup.personality, chunks, terrainGenerator
         );
       }
-      
+
       // If we're close enough to the target structure, initiate an attack
       const targetDistance = calculateDistance(location, monsterGroup.targetStructure);
-      
+
       if (targetDistance <= 1.5) {
         // Get the target structure's data from chunks instead of database
         const targetChunkKey = getChunkKey(monsterGroup.targetStructure.x, monsterGroup.targetStructure.y);
         const targetTileKey = `${monsterGroup.targetStructure.x},${monsterGroup.targetStructure.y}`;
-        
+
         // Use chunks data instead of making a database call
         if (chunks && chunks[targetChunkKey] && chunks[targetChunkKey][targetTileKey]) {
           const targetTileData = chunks[targetChunkKey][targetTileKey];
-          
+
           if (targetTileData && targetTileData.structure) {
             // We've reached the target - attack it!
             return await initiateAttackOnStructure(
-              db, 
-              worldId, 
-              monsterGroup, 
-              targetTileData.structure, 
-              monsterGroup.targetStructure, 
-              updates, 
+              db,
+              worldId,
+              monsterGroup,
+              targetTileData.structure,
+              monsterGroup.targetStructure,
+              ops,
               now
             );
           }
@@ -442,102 +436,102 @@ export async function executeMonsterStrategy(
       } else {
         // Still moving toward target - prioritize movement
         return await moveMonsterTowardsTarget(
-          db, worldId, monsterGroup, location, worldScan, updates, now, 'structure_attack', null, chunks
+          db, worldId, monsterGroup, location, worldScan, ops, now, 'structure_attack', null, chunks
         );
       }
     }
-    
+
     // Handle exploration phase differently
     if (inExplorationPhase) {
       // Skip demobilizing, merging, and other non-movement actions during exploration
       // Force movement action with higher probability (90%)
       if (Math.random() < 0.9) {
         return await moveMonsterTowardsTarget(
-          db, worldId, monsterGroup, location, worldScan, updates, now, null, monsterGroup.personality, chunks, terrainGenerator
+          db, worldId, monsterGroup, location, worldScan, ops, now, null, monsterGroup.personality, chunks, terrainGenerator
         );
       }
     }
-    
+
     // Get personality and its influence weights, or use balanced defaults
     const personalityId = monsterGroup.personality?.id || 'BALANCED';
     const personality = MONSTER_PERSONALITIES[personalityId] || MONSTER_PERSONALITIES.BALANCED;
     const weights = personality.weights;
-    
+
     // NEW: Action pool approach - define possible actions with weights
     const actionPool = [];
-    
+
     // Factors that influence decisions
     const totalUnits = monsterGroup.units ? Object.keys(monsterGroup.units).length : 1;
-    
+
     // Check for resources using countTotalResources that already supports both formats
     // Track both whether we have any resources and the resource count
     let hasResources = false;
     let resourceCount = 0;
-    
+
     if (monsterGroup.items) {
       // Handle items as object (new format)
       if (!Array.isArray(monsterGroup.items) && typeof monsterGroup.items === 'object') {
         hasResources = Object.keys(monsterGroup.items).length > 0;
         resourceCount = countTotalResources(monsterGroup.items);
-      } 
+      }
       // Handle items as array (legacy format)
       else if (Array.isArray(monsterGroup.items)) {
         hasResources = monsterGroup.items.length > 0;
         resourceCount = countTotalResources(monsterGroup.items);
       }
     }
-    
+
     // NEW: Check if the monster is on the same tile as a player structure it could attack
-    const onSameTileAsPlayerStructure = 
-      tileData.structure && 
-      !tileData.structure.monster && 
+    const onSameTileAsPlayerStructure =
+      tileData.structure &&
+      !tileData.structure.monster &&
       tileData.structure.type !== 'spawn';
-    
+
     // If aggressive/feral monster is on same tile as a player structure, always attack it
-    if (onSameTileAsPlayerStructure && 
+    if (onSameTileAsPlayerStructure &&
         (personalityId === 'AGGRESSIVE' || personalityId === 'FERAL')) {
       console.log(`${personalityId} monster group ${monsterGroup.id} on same tile as player structure - attacking!`);
-      
+
       return await initiateAttackOnStructure(
-        db, worldId, monsterGroup, tileData.structure, location, updates, now
+        db, worldId, monsterGroup, tileData.structure, location, ops, now
       );
     }
-    
+
     // Structure under construction that could be adopted
-    const structureUnderConstruction = tileData.structure && 
-                                     tileData.structure.status === 'building' && 
-                                     (!tileData.structure.builder || 
-                                      !tileData.groups || 
+    const structureUnderConstruction = tileData.structure &&
+                                     tileData.structure.status === 'building' &&
+                                     (!tileData.structure.builder ||
+                                      !tileData.groups ||
                                       !Object.values(tileData.groups).some(g => g.status === 'building'));
-    
+
     // Structure on current tile
     const structureOnTile = tileData.structure && tileData.structure?.monster;
-    
+
     // Just mobilized from structure on current tile?
-    const justMobilized = monsterGroup.mobilizedFromStructure && 
+    const justMobilized = monsterGroup.mobilizedFromStructure &&
       monsterGroup.mobilizedFromStructure === (tileData.structure?.id || null);
-    
+
     if (justMobilized && structureOnTile) {
       // If we're on our own structure and have just mobilized, prioritize moving away
       return await moveMonsterTowardsTarget(
-        db, worldId, monsterGroup, location, worldScan, updates, now, null, personality, chunks, terrainGenerator
+        db, worldId, monsterGroup, location, worldScan, ops, now, null, personality, chunks, terrainGenerator
       );
     }
-    
+
     // Check for other monster groups to merge with
     const mergeableGroups = !inExplorationPhase ? findMergeableMonsterGroups(tileData, groupId) : [];
     if (mergeableGroups.length > 0) {
       // NEW: Calculate monster power
       const monsterPower = calculateGroupPower(monsterGroup);
-      
+
       // NEW: If this is an aggressive monster that's too weak to attack anything, prioritize merging
       let mergeWeight = 0.7 * (weights?.merge || 1.0);
-      
+
       // If aggressive/feral and too weak, greatly increase merging priority
       if ((personalityId === 'AGGRESSIVE' || personalityId === 'FERAL')) {
         // Check power against potential targets (simplified version)
         let canAttackAnyTarget = false;
-        
+
         // Check for attackable structures
         if (tileData.structure && !tileData.structure.monster) {
           const structureType = tileData.structure.type;
@@ -548,31 +542,31 @@ export async function executeMonsterStrategy(
           const powerThreshold = personalityId === 'AGGRESSIVE' ? 0.4 : 0.6;
           canAttackAnyTarget = monsterPower >= structurePower * powerThreshold;
         }
-        
+
         // If too weak to attack, prioritize merging
         if (!canAttackAnyTarget) {
           console.log(`${personalityId} monster group ${monsterGroup.id} is too weak to attack - prioritizing merging!`);
           mergeWeight = 2.0; // Very high priority to merge when too weak
         }
       }
-      
+
       actionPool.push({
         name: 'merge',
         weight: mergeWeight,
-        execute: async () => await mergeMonsterGroupsOnTile(db, worldId, monsterGroup, mergeableGroups, updates, now)
+        execute: async () => await mergeMonsterGroupsOnTile(db, worldId, monsterGroup, mergeableGroups, ops, now)
       });
     }
-    
+
     // Check for battles on this tile to join
     if (!inExplorationPhase && tileData.battles) {
       const joinWeight = weights?.joinBattle || weights?.attack || 1.0;
       actionPool.push({
         name: 'join_battle',
         weight: joinWeight * 0.6,
-        execute: async () => await joinExistingBattle(db, worldId, monsterGroup, tileData, updates, now)
+        execute: async () => await joinExistingBattle(db, worldId, monsterGroup, tileData, ops, now)
       });
     }
-    
+
     // Check for other monster groups to attack
     if (!inExplorationPhase && personality?.canAttackMonsters) {
       const attackableMonsters = findAttackableMonsterGroups(tileData, groupId);
@@ -580,11 +574,11 @@ export async function executeMonsterStrategy(
         actionPool.push({
           name: 'attack_monsters',
           weight: 0.7 * (weights?.attackMonsters || 0),
-          execute: async () => await initiateAttackOnMonsters(db, worldId, monsterGroup, attackableMonsters, location, updates, now)
+          execute: async () => await initiateAttackOnMonsters(db, worldId, monsterGroup, attackableMonsters, location, ops, now)
         });
       }
     }
-    
+
     // Check for player groups to attack
     const playerGroupsOnTile = findPlayerGroupsOnTile(tileData);
     if (playerGroupsOnTile.length > 0) {
@@ -594,73 +588,73 @@ export async function executeMonsterStrategy(
       for (const playerGroup of playerGroupsOnTile) {
         playerPower += calculateGroupPower(playerGroup);
       }
-      
+
       // Only add attack option if monster is strong enough
       const powerThreshold = personality?.id === 'AGGRESSIVE' ? 0.5 : 0.7;
       if (monsterPower >= playerPower * powerThreshold) {
         actionPool.push({
           name: 'attack_players',
           weight: 0.8 * (weights?.attack || 1.0),
-          execute: async () => await initiateAttackOnPlayers(db, worldId, monsterGroup, playerGroupsOnTile, location, updates, now)
+          execute: async () => await initiateAttackOnPlayers(db, worldId, monsterGroup, playerGroupsOnTile, location, ops, now)
         });
       }
     }
-    
+
     // Check for structure to attack
     const attackableStructure = tileData.structure && !tileData.structure?.monster;
     if (attackableStructure) {
       // Calculate powers
       const monsterPower = calculateGroupPower(monsterGroup);
-      
+
       // Calculate structure power
       const structureType = tileData.structure.type;
       let structurePower = 0;
-      
+
       if (STRUCTURES[structureType]) {
         structurePower = STRUCTURES[structureType].durability || 0;
-        
+
         // Add power from defending groups
         const defendingGroups = Object.values(tileData.groups || {}).filter(
           group => group.type !== 'monster' && group.id !== monsterGroup.id
         );
-        
+
         for (const defenderGroup of defendingGroups) {
           structurePower += calculateGroupPower(defenderGroup);
         }
       }
-      
+
       // MODIFIED: Always add attack option if monster is on same tile as structure
       // Otherwise, check power threshold
       const onSameTile = true; // We know we're on the same tile in this context
       const powerThreshold = personality?.id === 'AGGRESSIVE' ? 0.4 : 0.6;
-      
+
       if (onSameTile || monsterPower >= structurePower * powerThreshold) {
         // If on same tile, give very high priority to attacking
-        const attackWeight = onSameTile ? 
+        const attackWeight = onSameTile ?
           2.0 : // Very high weight when on same tile
           0.7 * (weights?.attack || 1.0); // Normal weight otherwise
-        
+
         actionPool.push({
           name: 'attack_structure',
           weight: attackWeight,
-          execute: async () => await initiateAttackOnStructure(db, worldId, monsterGroup, tileData.structure, location, updates, now)
+          execute: async () => await initiateAttackOnStructure(db, worldId, monsterGroup, tileData.structure, location, ops, now)
         });
       }
     }
-    
+
     // Check if we can adopt an abandoned structure
     if (structureUnderConstruction) {
       actionPool.push({
         name: 'adopt_structure',
         weight: 0.7 * (weights?.build || 1.0),
-        execute: async () => await adoptAbandonedStructure(db, worldId, monsterGroup, tileData.structure, updates, now, chunks)
+        execute: async () => await adoptAbandonedStructure(db, worldId, monsterGroup, tileData.structure, ops, now, chunks)
       });
     }
-    
+
     // Check if we can upgrade structure or building
     if (structureOnTile && hasResources && resourceCount > 20) {
       const structure = tileData.structure;
-      
+
       // Check if the structure has buildings that can be upgraded
       if (structure.buildings && Object.keys(structure.buildings).length > 0) {
         actionPool.push({
@@ -669,65 +663,65 @@ export async function executeMonsterStrategy(
           execute: async () => {
             const buildings = Object.entries(structure.buildings);
             const [buildingType, buildingData] = buildings[Math.floor(Math.random() * buildings.length)];
-            return await addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, structure, buildingType, updates, now);
+            return await addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, structure, buildingType, ops, now);
           }
         });
       }
-      
+
       // Add option to upgrade the structure itself
       actionPool.push({
         name: 'upgrade_structure',
         weight: 0.3 * (weights?.build || 1.0),
-        execute: async () => await upgradeMonsterStructure(db, worldId, monsterGroup, tileData.structure, updates, now)
+        execute: async () => await upgradeMonsterStructure(db, worldId, monsterGroup, tileData.structure, ops, now)
       });
     }
-    
+
     // Check if we can deposit resources
     const depositWeight = ((weights?.build || 1.0) + (weights?.gather || 1.0)) / 2;
     if (structureOnTile && hasResources) {
       actionPool.push({
         name: 'deposit_resources',
         weight: 0.6 * depositWeight,
-        execute: async () => await demobilizeAtMonsterStructure(db, worldId, monsterGroup, tileData.structure, updates, now)
+        execute: async () => await demobilizeAtMonsterStructure(db, worldId, monsterGroup, tileData.structure, ops, now)
       });
     }
-    
+
     // Check if we can build a new structure
-    if (totalUnits >= MIN_UNITS_TO_BUILD && 
-        hasResources && 
+    if (totalUnits >= MIN_UNITS_TO_BUILD &&
+        hasResources &&
         resourceCount >= MIN_RESOURCES_TO_BUILD &&
         !structureOnTile &&
         !tileData.structure) {
       actionPool.push({
         name: 'build_structure',
         weight: 0.4 * (weights?.build || 1.0),
-        execute: async () => await buildMonsterStructure(db, worldId, monsterGroup, location, updates, now, worldScan, chunks)
+        execute: async () => await buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan, chunks)
       });
     }
-    
+
     // Check if we can add a building to an existing structure
-    if (structureOnTile && 
+    if (structureOnTile &&
         tileData.structure.monster &&
-        hasResources && 
+        hasResources &&
         resourceCount > 15 &&
         (!tileData.structure.buildings || Object.keys(tileData.structure.buildings).length < 3)) {
-      
+
       actionPool.push({
         name: 'add_building',
         weight: 0.3 * (weights?.build || 1.0),
         execute: async () => {
           const possibleBuildings = ['monster_nest', 'monster_forge', 'monster_totem'];
           const buildingType = possibleBuildings[Math.floor(Math.random() * possibleBuildings.length)];
-          return await addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, tileData.structure, buildingType, updates, now);
+          return await addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, tileData.structure, buildingType, ops, now);
         }
       });
     }
-    
+
     // Check if we should return resources to a structure
     if (hasResources && resourceCount > 10 && worldScan.monsterStructures.length > 0) {
       let nearestStructure = null;
       let minDistance = Infinity;
-      
+
       for (const structure of worldScan.monsterStructures) {
         const distance = calculateDistance(location, structure);
         if (distance < minDistance) {
@@ -735,15 +729,15 @@ export async function executeMonsterStrategy(
           nearestStructure = structure;
         }
       }
-      
+
       if (nearestStructure) {
         actionPool.push({
           name: 'return_resources',
           weight: 0.8 * (weights?.gather || 1.0),
           execute: async () => await moveMonsterTowardsTarget(
-            db, worldId, monsterGroup, location, 
-            { ...worldScan, targetStructure: nearestStructure }, 
-            updates, now, 
+            db, worldId, monsterGroup, location,
+            { ...worldScan, targetStructure: nearestStructure },
+            ops, now,
             'resource_deposit',
             personality,
             chunks,
@@ -752,45 +746,45 @@ export async function executeMonsterStrategy(
         });
       }
     }
-    
+
     // Check if we should gather resources
     if ((!hasResources || resourceCount < 5)) {
       actionPool.push({
         name: 'gather',
         weight: 0.7 * (weights?.gather || 1.0),
-        execute: async () => await startMonsterGathering(db, worldId, monsterGroup, updates, now, chunks)
+        execute: async () => await startMonsterGathering(db, worldId, monsterGroup, ops, now, chunks)
       });
     }
-    
+
     // Always add exploration/movement as an option with higher weight for nomadic
-    const exploreWeight = inExplorationPhase ? 
+    const exploreWeight = inExplorationPhase ?
       1.5 * (weights?.explore || 1.0) : // Higher for exploration phase
-      (personality?.id === 'NOMADIC' ? 
+      (personality?.id === 'NOMADIC' ?
         1.2 * (weights?.explore || 1.0) : // Higher for nomadic
         0.8 * (weights?.explore || 1.0)); // Normal for others
-        
+
     actionPool.push({
       name: 'explore',
       weight: exploreWeight,
       execute: async () => await moveMonsterTowardsTarget(
-        db, worldId, monsterGroup, location, worldScan, updates, now, null, personality, chunks, terrainGenerator
+        db, worldId, monsterGroup, location, worldScan, ops, now, null, personality, chunks, terrainGenerator
       )
     });
-    
+
     // Add idle as the lowest-probability option (reduced by 70%)
     actionPool.push({
       name: 'idle',
       weight: 0.3, // Fixed lower weight to reduce idle time
       execute: async () => ({ action: 'idle', reason: 'personality' })
     });
-    
+
     // Calculate total weight for normalization
     const totalWeight = actionPool.reduce((sum, action) => sum + action.weight, 0);
-    
+
     // Select an action using weighted random selection
     let targetWeight = Math.random() * totalWeight;
     let selectedAction = null;
-    
+
     for (const action of actionPool) {
       targetWeight -= action.weight;
       if (targetWeight <= 0) {
@@ -798,21 +792,21 @@ export async function executeMonsterStrategy(
         break;
       }
     }
-    
+
     // If something went wrong with selection, default to explore
     if (!selectedAction) {
       selectedAction = actionPool.find(a => a.name === 'explore') || actionPool[0];
-      
+
       // If still no action is available, return a safe default
       if (!selectedAction) {
         console.log(`No action available for monster group ${monsterGroup.id}. Using idle default.`);
         return { action: 'idle', reason: 'fallback_no_actions' };
       }
     }
-    
+
     // Log the action chosen
     console.log(`Monster group ${monsterGroup.id} with ${personalityId} personality chose action: ${selectedAction.name}`);
-    
+
     // Execute the selected action with try-catch to handle errors
     try {
       const actionResult = await selectedAction.execute();
@@ -826,8 +820,8 @@ export async function executeMonsterStrategy(
       return actionResult;
     } catch (actionError) {
       console.error(`Error executing ${selectedAction.name} for monster group ${monsterGroup.id}:`, actionError);
-      return { 
-        action: 'error', 
+      return {
+        action: 'error',
         reason: `action_execution_error: ${actionError.message}`,
         originalAction: selectedAction.name
       };
@@ -844,94 +838,4 @@ function getChunkKey(x, y) {
   const chunkX = Math.floor(x / 20);
   const chunkY = Math.floor(y / 20);
   return `${chunkX},${chunkY}`;
-}
-
-/**
- * Sanitize updates to prevent Firebase update conflicts
- * @param {Object} updates Original updates object
- * @returns {Object} Sanitized updates object
- */
-function sanitizeUpdates(updates) {
-  const sanitizedUpdates = {};
-  const pathsToSkip = new Set();
-  
-  // First pass: Identify all paths that might conflict
-  for (const path in updates) {
-    if (pathsToSkip.has(path)) continue;
-    
-    // Check for potential conflicts in other paths
-    for (const otherPath in updates) {
-      if (path === otherPath || pathsToSkip.has(otherPath)) continue;
-      
-      // If otherPath is an ancestor path of path, we need to handle this conflict
-      if (path.startsWith(otherPath + '/')) {
-        // If we're setting the entire object, no need to set its individual properties
-        pathsToSkip.add(path);
-        break;
-      }
-      
-      // If path is an ancestor of otherPath, skip the other path
-      if (otherPath.startsWith(path + '/')) {
-        pathsToSkip.add(otherPath);
-      }
-    }
-  }
-  
-  // Second pass: Identify and resolve status conflicts (fighting vs moving)
-  const statusConflicts = new Map();
-  
-  // Look for status setting paths that might conflict
-  const statusRegex = /\/groups\/([^\/]+)\/status$/;
-  
-  for (const path in updates) {
-    if (pathsToSkip.has(path)) continue;
-    
-    const statusMatch = path.match(statusRegex);
-    if (statusMatch) {
-      const groupBasePath = path.substring(0, path.lastIndexOf('/status'));
-      const groupId = statusMatch[1];
-      
-      // If we've seen this group before, we have a conflict
-      if (statusConflicts.has(groupBasePath)) {
-        const currentStatus = updates[path];
-        const previousStatus = updates[statusConflicts.get(groupBasePath)];
-        
-        // Prioritize combat over movement
-        if (currentStatus === 'fighting' && previousStatus === 'moving') {
-          // Keep fighting, remove moving
-          pathsToSkip.add(statusConflicts.get(groupBasePath));
-          
-          // Also skip any movement-related paths for this group
-          for (const otherPath in updates) {
-            if (otherPath.startsWith(groupBasePath) && 
-                (otherPath.includes('/move') || otherPath.includes('/path'))) {
-              pathsToSkip.add(otherPath);
-            }
-          }
-        } else if (currentStatus === 'moving' && previousStatus === 'fighting') {
-          // Keep fighting, skip moving
-          pathsToSkip.add(path);
-          
-          // Also skip any movement-related paths for this group
-          for (const otherPath in updates) {
-            if (otherPath.startsWith(groupBasePath) && 
-                (otherPath.includes('/move') || otherPath.includes('/path'))) {
-              pathsToSkip.add(otherPath);
-            }
-          }
-        }
-      } else {
-        statusConflicts.set(groupBasePath, path);
-      }
-    }
-  }
-  
-  // Third pass: Add only non-skipped paths
-  for (const path in updates) {
-    if (!pathsToSkip.has(path)) {
-      sanitizedUpdates[path] = updates[path];
-    }
-  }
-  
-  return sanitizedUpdates;
 }

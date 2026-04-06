@@ -14,6 +14,7 @@ import demobiliseUnits       from './actions/demobiliseUnits.js';
 import flee                  from './actions/flee.js';
 import joinBattle            from './actions/joinBattle.js';
 import joinWorld             from './actions/joinWorld.js';
+import loadGroup             from './actions/loadGroup.js';
 import mobiliseUnits         from './actions/mobiliseUnits.js';
 import moveGroup             from './actions/moveGroup.js';
 import recruitUnits          from './actions/recruitUnits.js';
@@ -23,6 +24,7 @@ import startBuildingUpgrade  from './actions/startBuildingUpgrade.js';
 import startCrafting         from './actions/startCrafting.js';
 import startGathering        from './actions/startGathering.js';
 import startStructureUpgrade from './actions/startStructureUpgrade.js';
+import unloadGroup           from './actions/unloadGroup.js';
 
 export async function route(db, req, body) {
   const { method } = req;
@@ -74,6 +76,7 @@ export async function route(db, req, body) {
     if (s2 === 'flee')                  return flee(ctx);
     if (s2 === 'joinBattle')            return joinBattle(ctx);
     if (s2 === 'joinWorld')             return joinWorld(ctx);
+    if (s2 === 'loadGroup')             return loadGroup(ctx);
     if (s2 === 'mobiliseUnits')         return mobiliseUnits(ctx);
     if (s2 === 'moveGroup')             return moveGroup(ctx);
     if (s2 === 'recruitUnits')          return recruitUnits(ctx);
@@ -83,6 +86,7 @@ export async function route(db, req, body) {
     if (s2 === 'startCrafting')         return startCrafting(ctx);
     if (s2 === 'startGathering')        return startGathering(ctx);
     if (s2 === 'startStructureUpgrade') return startStructureUpgrade(ctx);
+    if (s2 === 'unloadGroup')           return unloadGroup(ctx);
 
     throw apiError(404, `unknown action: ${s2}`);
   }

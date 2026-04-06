@@ -4,7 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { getPlayerWorldData } from '../../db/players.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function spawnPlayer({ uid, data, db }) {
   const { worldId, spawnX, spawnY } = data;
@@ -23,15 +23,12 @@ export async function spawnPlayer({ uid, data, db }) {
   const tileKey     = `${spawnX},${spawnY}`;
   const now         = Date.now();
 
-  const updates = {
-    // Place player entity on tile
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/players/${uid}`]: { displayName, id: uid, race },
-    // Mark player alive
-    [`players/${uid}/worlds/${worldId}/alive`]: true,
-    [`players/${uid}/worlds/${worldId}/lastLocation`]: { x: spawnX, y: spawnY, timestamp: now }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.players.${uid}`, { displayName, id: uid, race });
+  ops.player(uid, worldId, 'alive',        true);
+  ops.player(uid, worldId, 'lastLocation', { x: spawnX, y: spawnY, timestamp: now });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   return { success: true, location: { x: spawnX, y: spawnY }, timestamp: now };
 }

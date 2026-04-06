@@ -4,7 +4,7 @@
  */
 
 import { BUILDINGS } from 'gisaima-shared';
-import { applyUpdates } from '../db/adapter.js';
+import { Ops } from '../lib/ops.js';
 
 export const upgradeTickProcessor = processUpgrades;
 
@@ -30,12 +30,12 @@ export async function processUpgrades(worldId, worldData, db) {
       } catch (err) {
         console.error(`Error processing upgrade ${upgrade.id}:`, err);
         failed++;
-        await applyUpdates(db, {
-          [`worlds/${worldId}/upgrades/${upgrade.id}/processed`]:  true,
-          [`worlds/${worldId}/upgrades/${upgrade.id}/failed`]:     true,
-          [`worlds/${worldId}/upgrades/${upgrade.id}/error`]:      err.message,
-          [`worlds/${worldId}/upgrades/${upgrade.id}/processedAt`]: now
-        });
+        const ops = new Ops();
+        ops.world(worldId, `upgrades.${upgrade.id}.processed`,  true);
+        ops.world(worldId, `upgrades.${upgrade.id}.failed`,     true);
+        ops.world(worldId, `upgrades.${upgrade.id}.error`,      err.message);
+        ops.world(worldId, `upgrades.${upgrade.id}.processedAt`, now);
+        await ops.flush(db);
       }
     }
 
@@ -72,28 +72,27 @@ async function applyUpgrade(worldId, upgrade, worldData, db, now) {
   };
 
   const [x, y] = tileKey.split(',').map(Number);
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`]: updatedStructure,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/processed`]:  true,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/failed`]:     false,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/processedAt`]: now,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/status`]:     'completed',
-    [`worlds/${worldId}/chat/upgrade_complete_${upgrade.id}`]: {
-      location: { x, y },
-      text: `A structure at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
-      timestamp: now,
-      type: 'system'
-    }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure`, updatedStructure);
+  ops.world(worldId, `upgrades.${upgrade.id}.processed`,  true);
+  ops.world(worldId, `upgrades.${upgrade.id}.failed`,     false);
+  ops.world(worldId, `upgrades.${upgrade.id}.processedAt`, now);
+  ops.world(worldId, `upgrades.${upgrade.id}.status`,     'completed');
+  ops.chat(worldId, {
+    location: { x, y },
+    text: `A structure at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
+    timestamp: now,
+    type: 'system'
+  });
 
   if (upgrade.startedBy) {
-    updates[`players/${upgrade.startedBy}/notifications/upgrade_${now}`] = {
+    ops.player(upgrade.startedBy, null, `notifications.upgrade_${now}`, {
       type: 'upgrade_complete', worldId, structureId: structure.id,
       structureName: structure.name, location: { x, y }, fromLevel, toLevel, timestamp: now
-    };
+    });
   }
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, structure: updatedStructure };
 }
 
@@ -119,29 +118,28 @@ async function applyBuildingUpgrade(worldId, upgrade, worldData, db, now) {
   };
 
   const [x, y] = tileKey.split(',').map(Number);
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/buildings/${buildingId}`]: updatedBuilding,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/processed`]:  true,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/failed`]:     false,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/processedAt`]: now,
-    [`worlds/${worldId}/upgrades/${upgrade.id}/status`]:     'completed',
-    [`worlds/${worldId}/chat/building_upgrade_complete_${upgrade.id}`]: {
-      location: { x, y },
-      text: `A ${building.name || building.type} at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
-      timestamp: now,
-      type: 'system'
-    }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.buildings.${buildingId}`, updatedBuilding);
+  ops.world(worldId, `upgrades.${upgrade.id}.processed`,  true);
+  ops.world(worldId, `upgrades.${upgrade.id}.failed`,     false);
+  ops.world(worldId, `upgrades.${upgrade.id}.processedAt`, now);
+  ops.world(worldId, `upgrades.${upgrade.id}.status`,     'completed');
+  ops.chat(worldId, {
+    location: { x, y },
+    text: `A ${building.name || building.type} at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
+    timestamp: now,
+    type: 'system'
+  });
 
   if (upgrade.startedBy) {
-    updates[`players/${upgrade.startedBy}/notifications/building_upgrade_${now}`] = {
+    ops.player(upgrade.startedBy, null, `notifications.building_upgrade_${now}`, {
       type: 'building_upgrade_complete', worldId, structureId: upgrade.structureId,
       buildingId, buildingName: building.name || building.type, location: { x, y },
       fromLevel, toLevel, timestamp: now
-    };
+    });
   }
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, building: updatedBuilding };
 }
 

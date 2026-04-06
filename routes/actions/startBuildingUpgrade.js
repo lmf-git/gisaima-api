@@ -1,7 +1,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { BUILDINGS } from 'gisaima-shared';
 import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function startBuildingUpgrade({ uid, data, db }) {
   const { worldId, x, y, buildingId } = data;
@@ -62,21 +62,20 @@ export async function startBuildingUpgrade({ uid, data, db }) {
     resources: requiredResources, status: 'pending', processed: false
   };
 
-  const updates = {
-    [`worlds/${worldId}/upgrades/${upgradeId}`]: upgradeData,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/buildings/${buildingId}/upgradeInProgress`]:  true,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/buildings/${buildingId}/upgradeId`]:          upgradeId,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/buildings/${buildingId}/upgradeStartedAt`]:   now,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/buildings/${buildingId}/upgradeCompletesAt`]: now + upgradeTimeMs,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure/items`]: updatedItems,
-    [`worlds/${worldId}/chat/building_upgrade_${upgradeId}`]: {
-      location: { x, y },
-      text: `${player.displayName} started upgrading a ${building.name || building.type} from level ${currentLevel} to ${nextLevel}.`,
-      timestamp: now, type: 'event'
-    }
-  };
+  const ops = new Ops();
+  ops.world(worldId, `upgrades.${upgradeId}`, upgradeData);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.buildings.${buildingId}.upgradeInProgress`,  true);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.buildings.${buildingId}.upgradeId`,          upgradeId);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.buildings.${buildingId}.upgradeStartedAt`,   now);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.buildings.${buildingId}.upgradeCompletesAt`, now + upgradeTimeMs);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, updatedItems);
+  ops.chat(worldId, {
+    location: { x, y },
+    text: `${player.displayName} started upgrading a ${building.name || building.type} from level ${currentLevel} to ${nextLevel}.`,
+    timestamp: now, type: 'event'
+  });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
   return { success: true, upgradeId, buildingId, fromLevel: currentLevel, toLevel: nextLevel, completesAt: now + upgradeTimeMs };
 }
 

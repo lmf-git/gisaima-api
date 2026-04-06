@@ -23,5 +23,5 @@ export async function getRecentChat(db, worldId, limit = 100) {
     .sort({ timestamp: -1 })
     .limit(limit)
     .toArray()
-    .then(msgs => msgs.reverse()); // oldest-first
+    .then(msgs => msgs.reverse().map(({ _id, ...m }) => ({ id: _id.toString(), ...m }))); // oldest-first, normalize _id → id
 }

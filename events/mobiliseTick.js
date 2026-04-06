@@ -3,29 +3,23 @@
  * Handles completing group mobilization during tick cycles
  */
 
-export function processMobilizations(worldId, updates, groups, chunkKey, tileKey, now) {
+export function processMobilizations(worldId, ops, groups, chunkKey, tileKey, now) {
   let mobilizationsProcessed = 0;
 
   for (const [groupId, group] of Object.entries(groups)) {
     if (group.status !== 'mobilizing') continue;
 
-    const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}`;
-    updates[`${groupPath}/status`] = 'idle';
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
 
-    const chatMessageText = createMobilizationMessage(group, tileKey);
-    const chatMessageKey = `chat_${now}_${Math.floor(Math.random() * 1000)}`;
-    updates[`worlds/${worldId}/chat/${chatMessageKey}`] = {
-      text: chatMessageText,
+    const [x, y] = tileKey.split(',').map(Number);
+    ops.chat(worldId, {
+      text: createMobilizationMessage(group, tileKey),
       type: 'event',
       timestamp: now,
       userId: group.owner || 'system',
       userName: group.name || 'System',
-      location: {
-        x: parseInt(tileKey.split(',')[0]),
-        y: parseInt(tileKey.split(',')[1]),
-        timestamp: now
-      }
-    };
+      location: { x, y, timestamp: now }
+    });
 
     mobilizationsProcessed++;
     console.log(`Group ${groupId} completed mobilization at ${tileKey} in chunk ${chunkKey}`);

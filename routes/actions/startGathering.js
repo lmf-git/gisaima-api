@@ -3,7 +3,7 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { applyUpdates } from '../../db/adapter.js';
+import { Ops } from '../../lib/ops.js';
 
 export async function startGathering({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId } = data;
@@ -23,23 +23,21 @@ export async function startGathering({ uid, data, db }) {
   if (group.owner !== uid) throw err(403, 'You do not own this group');
   if (group.status !== 'idle') throw err(409, 'Group is not idle and cannot gather');
 
-  const biome  = tile.biome?.name || 'plains';
-  const now    = Date.now();
-  const chatId = `gather_start_${now}_${groupId}`;
+  const biome = tile.biome?.name || 'plains';
+  const now   = Date.now();
 
-  const updates = {
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/status`]:                 'gathering',
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/gatheringBiome`]:         biome,
-    [`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${groupId}/gatheringTicksRemaining`]: 2,
-    [`worlds/${worldId}/chat/${chatId}`]: {
-      type: 'system',
-      text: `${group.name} has started gathering in ${biome} biome at (${locationX},${locationY})`,
-      timestamp: now,
-      location: { x: locationX, y: locationY }
-    }
-  };
+  const ops = new Ops();
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'gathering');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         biome);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, 2);
+  ops.chat(worldId, {
+    type: 'system',
+    text: `${group.name} has started gathering in ${biome} biome at (${locationX},${locationY})`,
+    timestamp: now,
+    location: { x: locationX, y: locationY }
+  });
 
-  await applyUpdates(db, updates);
+  await ops.flush(db);
 
   // Achievement (best-effort)
   const playerDoc = await db.collection('players').findOne({ _id: uid });
