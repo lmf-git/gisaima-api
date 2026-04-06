@@ -166,7 +166,8 @@ export async function handleMe(db, req) {
     { projection: { passwordHash: 0 } }
   );
   if (!user) throw apiError(404, 'user not found');
-  return user;
+  const { _id, ...rest } = user;
+  return { uid: _id, ...rest };
 }
 
 // ---------------------------------------------------------------------------
