@@ -5,14 +5,11 @@
 
 import { STRUCTURES } from 'gisaima-shared/definitions/STRUCTURES.js';
 import { BUILDINGS } from 'gisaima-shared/definitions/BUILDINGS.js';
-import { 
+import {
   canStructureBeUpgraded,
   hasSufficientResources,
   consumeResourcesFromItems,
   createMonsterConstructionMessage,
-  createGroupPath,
-  createStructurePath,
-  createChatMessagePath,
   generateMonsterId,
   isSuitableForMonsterBuilding
 } from '../_monsters.mjs';
@@ -123,98 +120,93 @@ async function isLocationSuitableForBuilding(db, worldId, location, worldScan, c
  * @param {object} chunks - Pre-loaded chunks data
  * @returns {object} Action result
  */
-export async function buildMonsterStructure(db, worldId, monsterGroup, location, updates, now, worldScan = null, chunks) {
+export async function buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan = null, chunks) {
   // Get personality for decision making
   const personality = monsterGroup.personality || { id: 'BALANCED' };
-  
+
   // Check if the monster group has enough units to build
   const unitCount = monsterGroup.units ? Object.keys(monsterGroup.units).length : 0;
   if (unitCount < MIN_UNITS_FOR_BUILDING) {
     return { action: null, reason: 'not_enough_units' };
   }
-  
+
   // Use provided worldScan or create an empty one if none provided
   const scanData = worldScan || { monsterStructures: [], playerSpawns: [], resourceHotspots: [] };
-  
+
   // Determine where to build
   const buildLocation = determineBuildLocation(location, scanData, personality);
-  
+
   // Check if location is suitable - chunks parameter is now required
   const isSuitable = await isLocationSuitableForBuilding(db, worldId, buildLocation, scanData, chunks);
   if (!isSuitable) {
     return { action: null, reason: 'unsuitable_location' };
   }
-  
+
   // Determine what to build
   const structureType = chooseStructureType(monsterGroup, personality);
-  
+
   // Check if monster has resources to build
   if (!hasResourcesToBuild(monsterGroup, structureType)) {
     return { action: null, reason: 'insufficient_resources' };
   }
-  
+
   // Generate structure ID
   const structureId = generateMonsterId('monster_structure', now);
-  
-  // Set up location references
-  const chunkX = Math.floor(buildLocation.x / 20);
-  const chunkY = Math.floor(buildLocation.y / 20);
-  const chunkKey = `${chunkX},${chunkY}`;
-  const tileKey = `${buildLocation.x},${buildLocation.y}`;
-  
+
+  // Set up build-location references
+  const buildChunkX = Math.floor(buildLocation.x / 20);
+  const buildChunkY = Math.floor(buildLocation.y / 20);
+  const buildChunkKey = `${buildChunkX},${buildChunkY}`;
+  const buildTileKey = `${buildLocation.x},${buildLocation.y}`;
+
   // Get the structure definition from the shared STRUCTURES object
   const structureData = STRUCTURES[structureType];
   if (!structureData) {
     return { action: null, reason: 'invalid_structure_type' };
   }
-  
-  // Calculate completion time - same format as player buildings
-  const buildTime = structureData.buildTime || 1; // Time in ticks
-  const completionTime = now + (buildTime * 60000); // Convert to milliseconds
-  
-  // Consume resources from the monster group
-  const groupPath = createGroupPath(worldId, monsterGroup);
-  if (!consumeResources(monsterGroup, structureType, updates, groupPath)) {
+
+  // Calculate completion time
+  const buildTime = structureData.buildTime || 1;
+  const completionTime = now + (buildTime * 60000);
+
+  // Consume resources from the monster group (returns remaining items or null)
+  const remainingItems = consumeResourcesFromItems(monsterGroup.items || {}, getRequiredResourcesForStructure(structureType));
+  if (remainingItems === null) {
     return { action: null, reason: 'resource_consumption_failed' };
   }
-  
-  // Add the structure to the tile - using same format as player structures
-  updates[`worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`] = {
+  ops.chunk(worldId, monsterGroup.chunkKey, `${monsterGroup.tileKey}.groups.${monsterGroup.id}.items`, remainingItems);
+
+  // Write the structure to its tile
+  ops.chunk(worldId, buildChunkKey, `${buildTileKey}.structure`, {
     id: structureId,
-    name: `${monsterGroup.name || "Monster"} ${structureData.name}`,
+    name: `${monsterGroup.name || 'Monster'} ${structureData.name}`,
     type: structureType,
     status: 'building',
     buildProgress: 0,
-    owner: monsterGroup.id, // Set the monster group's ID as owner instead of 'monster' string
-    ownerName: monsterGroup.name || "Monster",
-    monster: true, // Ensure this flag is always set for monster structures
+    owner: monsterGroup.id,
+    ownerName: monsterGroup.name || 'Monster',
+    monster: true,
     level: 1,
     items: [],
     capacity: structureData.capacity || 10
-  };
-  
-  // Set monster group as building - match player group format for UI consistency
-  updates[`${groupPath}/status`] = 'building';
-  
-  // Add a message about the building
-  const chatMessageId = generateMonsterId('monster_building', now);
-  updates[createChatMessagePath(worldId, chatMessageId)] = {
+  });
+
+  // Set monster group as building
+  ops.chunk(worldId, monsterGroup.chunkKey, `${monsterGroup.tileKey}.groups.${monsterGroup.id}.status`, 'building');
+  ops.chunk(worldId, monsterGroup.chunkKey, `${monsterGroup.tileKey}.groups.${monsterGroup.id}.preferredStructureId`, structureId);
+
+  // Chat message
+  ops.chat(worldId, {
     text: createMonsterConstructionMessage(monsterGroup, 'build', structureData.name, buildLocation),
     type: 'event',
     timestamp: now,
-    location: {
-      x: location.x,
-      y: location.y
-    }
-  };
-  
-  // Add this structure as the preferred structure for this group
-  updates[`${groupPath}/preferredStructureId`] = structureId;
-  
+    location: { x: location.x, y: location.y }
+  });
+
   return {
     action: 'build',
-    structureId: structureId,
-    structureType: structureType,
+    structureId,
+    structureType,
     location: buildLocation,
     completesAt: completionTime
   };
@@ -258,30 +250,6 @@ function hasResourcesToBuild(monsterGroup, structureType) {
   return hasSufficientResources(monsterGroup.items || {}, requiredResources);
 }
 
-/**
- * Consume resources required for building
- * @param {object} monsterGroup - Monster group data
- * @param {string} structureType - Structure type being built
- * @param {object} updates - Database updates object
- * @param {string} groupPath - Path to the group in database
- * @returns {boolean} True if resources were successfully consumed
- */
-function consumeResources(monsterGroup, structureType, updates, groupPath) {
-  // Get required resources
-  const requiredResources = getRequiredResourcesForStructure(structureType);
-  
-  // Use the helper function to consume resources
-  const remainingItems = consumeResourcesFromItems(monsterGroup.items || {}, requiredResources);
-  
-  // If resources couldn't be consumed, return false
-  if (remainingItems === null) {
-    return false;
-  }
-  
-  // Update the monster group with the remaining items
-  updates[`${groupPath}/items`] = remainingItems;
-  return true;
-}
 
 /**
  * Check if monster group has resources to upgrade a building
@@ -438,111 +406,72 @@ function determineBuildLocation(location, worldScan, personality) {
  * @param {number} now - Current timestamp
  * @returns {object} Action result
  */
-export async function upgradeMonsterStructure(db, worldId, monsterGroup, structure, updates, now) {
+export async function upgradeMonsterStructure(db, worldId, monsterGroup, structure, ops, now) {
   // Only upgrade monster structures
   if (!structure.monster === true) {
     return { action: null, reason: 'not_monster_structure' };
   }
-  
+
   // Check if the structure can be upgraded
   if (!canStructureBeUpgraded(structure)) {
     return { action: null, reason: 'max_level_reached' };
   }
-  
+
   // Check if monster group has resources to upgrade
   if (!hasResourcesToUpgrade(monsterGroup, structure)) {
     return { action: null, reason: 'insufficient_resources' };
   }
-  
-  // Get current location info
+
   const chunkKey = monsterGroup.chunkKey;
   const tileKey = monsterGroup.tileKey;
-  
-  // Consume resources for upgrade (simplified version)
-  const groupPath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/groups/${monsterGroup.id}`;
-  
-  // Generate a simple resource requirement for upgrade
+  const groupId = monsterGroup.id;
+  const currentLevel = structure.level || 1;
+
+  // Generate resource requirements for upgrade
   const requiredResources = [
-    { name: 'Wooden Sticks', quantity: 5 * currentLevel },
-    { name: 'Stone Pieces', quantity: 3 * currentLevel }
+    { name: 'WOODEN_STICKS', quantity: 5 * currentLevel },
+    { name: 'STONE_PIECES', quantity: 3 * currentLevel }
   ];
-  
-  // Add special resources for higher levels
+
   if (currentLevel >= 2) {
-    requiredResources.push({ name: 'Iron Ore', quantity: currentLevel });
+    requiredResources.push({ name: 'IRON_ORE', quantity: currentLevel });
   }
-  
-  // Create a copy of the monster's items
-  const remainingItems = [...(monsterGroup.items || [])];
-  let resourcesConsumed = false;
-  
-  // Consume each required resource
-  for (const required of requiredResources) {
-    let remainingQuantity = required.quantity;
-    
-    // Find items that match this resource
-    for (let i = 0; i < remainingItems.length; i++) {
-      if (remainingItems[i].name === required.name) {
-        const available = remainingItems[i].quantity || 1;
-        
-        if (available <= remainingQuantity) {
-          // Use the entire item
-          remainingQuantity -= available;
-          remainingItems.splice(i, 1);
-          i--; // Adjust index after removal
-        } else {
-          // Use part of the item
-          remainingItems[i].quantity -= remainingQuantity;
-          remainingQuantity = 0;
-        }
-        
-        if (remainingQuantity === 0) {
-          resourcesConsumed = true;
-          break;
-        }
-      }
-    }
-  }
-  
-  if (!resourcesConsumed) {
+
+  const remainingItems = consumeResourcesFromItems(monsterGroup.items || {}, requiredResources);
+  if (remainingItems === null) {
     return { action: null, reason: 'resource_consumption_failed' };
   }
-  
-  // Update the monster group with the remaining items
-  updates[`${groupPath}/items`] = remainingItems;
-  
+
+  // Update the monster group with remaining items
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`, remainingItems);
+
   // Update the structure
-  const structurePath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/structure`;
-  updates[`${structurePath}/level`] = currentLevel + 1;
-  updates[`${structurePath}/upgradeTime`] = now;
-  
-  // Set new features based on level
-  let newFeatures = [...(structure.features || [])];
-  
-  if (currentLevel + 1 === 2) {
+  const newLevel = currentLevel + 1;
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.level`, newLevel);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.upgradeTime`, now);
+
+  const newFeatures = [...(structure.features || [])];
+  if (newLevel === 2) {
     newFeatures.push('improved_defense');
-  } else if (currentLevel + 1 === 3) {
+  } else if (newLevel === 3) {
     newFeatures.push('monster_recruitment');
   }
-  
-  updates[`${structurePath}/features`] = newFeatures;
-  
-  // Add a message about the upgrade
-  const chatMessageId = `monster_upgrade_${now}_${monsterGroup.id}`;
-  updates[`worlds/${worldId}/chat/${chatMessageId}`] = {
-    text: `${monsterGroup.name || "Monsters"} have upgraded their ${structure.name || "structure"} to level ${currentLevel + 1}!`,
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.features`, newFeatures);
+
+  ops.chat(worldId, {
+    text: `${monsterGroup.name || "Monsters"} have upgraded their ${structure.name || "structure"} to level ${newLevel}!`,
     type: 'event',
     timestamp: now,
     location: {
       x: parseInt(tileKey.split(',')[0]),
       y: parseInt(tileKey.split(',')[1])
     }
-  };
-  
+  });
+
   return {
     action: 'upgrade',
     structureId: structure.id,
-    newLevel: currentLevel + 1
+    newLevel
   };
 }
 
@@ -556,115 +485,93 @@ export async function upgradeMonsterStructure(db, worldId, monsterGroup, structu
  * @param {number} now - Current timestamp
  * @returns {object} Action result
  */
-export async function demobilizeAtMonsterStructure(db, worldId, monsterGroup, structure, updates, now) {
+export async function demobilizeAtMonsterStructure(db, worldId, monsterGroup, structure, ops, now) {
   // Only allow demobilizing at monster structures
   if (!structure.monster) {
     return { action: null, reason: 'not_monster_structure' };
   }
-  
-  // Get paths
+
   const chunkKey = monsterGroup.chunkKey;
   const tileKey = monsterGroup.tileKey;
-  const groupPath = createGroupPath(worldId, monsterGroup);
-  const structurePath = createStructurePath(worldId, chunkKey, tileKey);
-  
+  const groupId = monsterGroup.id;
+
   // Check if the monster group has items to deposit
   const hasItems = monsterGroup.items && (
     (Array.isArray(monsterGroup.items) && monsterGroup.items.length > 0) ||
     (!Array.isArray(monsterGroup.items) && Object.keys(monsterGroup.items).length > 0)
   );
-  
+
   if (!hasItems) {
     return { action: null, reason: 'no_items_to_deposit' };
   }
-  
-  // Add the monster group's items to the structure
+
+  // Merge monster group items into structure items
+  let structureItems;
+
   if (Array.isArray(monsterGroup.items)) {
     // Legacy format: Array of item objects
-    const structureItems = Array.isArray(structure.items) ? [...structure.items] : [];
-    const groupItems = [...monsterGroup.items];
-    
-    // Combine items, merging similar ones
-    for (const item of groupItems) {
-      const existingIndex = structureItems.findIndex(i => i.name === item.name && i.type === item.type);
-      
+    const baseItems = Array.isArray(structure.items) ? [...structure.items] : [];
+
+    for (const item of monsterGroup.items) {
+      const existingIndex = baseItems.findIndex(i => i.name === item.name && i.type === item.type);
+
       if (existingIndex >= 0) {
-        // Add to existing item quantity
-        structureItems[existingIndex].quantity = (structureItems[existingIndex].quantity || 1) + 
-                                                (item.quantity || 1);
+        baseItems[existingIndex].quantity = (baseItems[existingIndex].quantity || 1) + (item.quantity || 1);
       } else {
-        // Add as new item
-        structureItems.push({ ...item });
+        baseItems.push({ ...item });
       }
     }
-    
-    // Update structure with items
-    updates[`${structurePath}/items`] = structureItems;
+
+    structureItems = baseItems;
   } else {
     // New format: Object with item codes as keys
-    let structureItems;
-    
-    // Check structure items format
     if (Array.isArray(structure.items)) {
-      // Structure using legacy format but monster group using new format
-      // Convert structure items to new format
+      // Convert structure's legacy array to object format
       structureItems = {};
-      
-      // Convert array to object
       structure.items.forEach(item => {
         if (item && item.id) {
-          const itemCode = item.id.toUpperCase();
-          structureItems[itemCode] = (structureItems[itemCode] || 0) + (item.quantity || 1);
+          const code = item.id.toUpperCase();
+          structureItems[code] = (structureItems[code] || 0) + (item.quantity || 1);
         } else if (item && item.name) {
-          const itemCode = item.name.toUpperCase().replace(/ /g, '_');
-          structureItems[itemCode] = (structureItems[itemCode] || 0) + (item.quantity || 1);
+          const code = item.name.toUpperCase().replace(/ /g, '_');
+          structureItems[code] = (structureItems[code] || 0) + (item.quantity || 1);
         }
       });
     } else if (!structure.items || typeof structure.items !== 'object') {
-      // Structure has no items or invalid format, use empty object
       structureItems = {};
     } else {
-      // Structure already using new format
       structureItems = {...structure.items};
     }
-    
-    // Merge monster group items into structure items
+
     Object.entries(monsterGroup.items).forEach(([itemCode, quantity]) => {
-      const upperItemCode = itemCode.toUpperCase();
-      structureItems[upperItemCode] = (structureItems[upperItemCode] || 0) + quantity;
+      const code = itemCode.toUpperCase();
+      structureItems[code] = (structureItems[code] || 0) + quantity;
     });
-    
-    // Update structure with merged items
-    updates[`${structurePath}/items`] = structureItems;
   }
-  
-  // Set group as demobilizing - this will be processed in the next tick
-  updates[`${groupPath}/status`] = 'demobilising';
-  updates[`${groupPath}/demobiliseStart`] = now;
-  updates[`${groupPath}/targetStructureId`] = structure.id;
-  
-  // Add a message about the resource deposit
-  const chatMessageId = generateMonsterId('monster_demobilize', now);
-  const location = { 
-    x: parseInt(tileKey.split(',')[0]), 
-    y: parseInt(tileKey.split(',')[1]) 
+
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, structureItems);
+
+  // Set group as demobilizing
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'demobilising');
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.demobiliseStart`, now);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.targetStructureId`, structure.id);
+
+  const location = {
+    x: parseInt(tileKey.split(',')[0]),
+    y: parseInt(tileKey.split(',')[1])
   };
-  
-  // Count item types for message
-  let itemCount = 0;
-  if (Array.isArray(monsterGroup.items)) {
-    itemCount = monsterGroup.items.length;
-  } else {
-    itemCount = Object.keys(monsterGroup.items).length;
-  }
-  
-  updates[createChatMessagePath(worldId, chatMessageId)] = {
+
+  const itemCount = Array.isArray(monsterGroup.items)
+    ? monsterGroup.items.length
+    : Object.keys(monsterGroup.items).length;
+
+  ops.chat(worldId, {
     text: `${monsterGroup.name || "Monster group"} is demobilizing at ${structure.name || 'their structure'} at (${location.x}, ${location.y}).`,
     type: 'event',
     timestamp: now,
     location
-  };
-  
+  });
+
   return {
     action: 'demobilize',
     depositedItems: itemCount,
@@ -683,7 +590,7 @@ export async function demobilizeAtMonsterStructure(db, worldId, monsterGroup, st
  * @param {number} now - Current timestamp
  * @returns {object} Action result
  */
-export async function addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, structure, buildingType, updates, now) {
+export async function addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, structure, buildingType, ops, now) {
   // Verify this is a monster structure
   if (!structure.monster) {
     return { action: null, reason: 'not_monster_structure' };
@@ -778,7 +685,7 @@ export async function addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, str
  * @param {object} chunks - Pre-loaded chunks data
  * @returns {object} Action result
  */
-export async function adoptAbandonedStructure(db, worldId, monsterGroup, structure, updates, now, chunks) {
+export async function adoptAbandonedStructure(db, worldId, monsterGroup, structure, ops, now, chunks) {
   // Only structures that are in building status can be adopted
   if (!structure || structure.status !== 'building') {
     return { action: null, reason: 'structure_not_building' };
@@ -840,53 +747,45 @@ export async function adoptAbandonedStructure(db, worldId, monsterGroup, structu
   }
   
   // Set monster group as building
-  const groupPath = createGroupPath(worldId, monsterGroup);
-  updates[`${groupPath}/status`] = 'building';
-  
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${monsterGroup.id}.status`, 'building');
+
   // Update structure to show it's being built by this monster group
-  const structurePath = createStructurePath(worldId, chunkKey, tileKey);
-  updates[`${structurePath}/builder`] = monsterGroup.id;
-  updates[`${structurePath}/builderName`] = monsterGroup.name || 'Monster group';
-  
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.builder`, monsterGroup.id);
+  ops.chunk(worldId, chunkKey, `${tileKey}.structure.builderName`, monsterGroup.name || 'Monster group');
+
   // If it's not already a monster structure, convert it if it was abandoned by players
   if (!structure.monster) {
     const longAbandoned = structure.lastActivity && (now - structure.lastActivity > 86400000); // 24 hours
     if (longAbandoned || structure.monsterFriendly) {
-      // Convert to monster structure if long abandoned or monster-friendly
-      updates[`${structurePath}/owner`] = 'monster';
-      updates[`${structurePath}/ownerName`] = monsterGroup.name || 'Monster group';
-      structure.monster = true; // Ensure monster flag is set
+      ops.chunk(worldId, chunkKey, `${tileKey}.structure.owner`, 'monster');
+      ops.chunk(worldId, chunkKey, `${tileKey}.structure.ownerName`, monsterGroup.name || 'Monster group');
+      structure.monster = true;
     }
   }
-  
-  // Add a message about adopting the structure
-  const chatMessageId = generateMonsterId('monster_adoption', now);
-  const location = { 
-    x: parseInt(tileKey.split(',')[0]), 
-    y: parseInt(tileKey.split(',')[1]) 
+
+  const location = {
+    x: parseInt(tileKey.split(',')[0]),
+    y: parseInt(tileKey.split(',')[1])
   };
-  
-  // Message text based on structure type
-  let messageText = '';
-  if (structure.monster) {
-    messageText = `${monsterGroup.name || "Monster group"} has decided to continue building the ${structure.name || 'structure'} at (${location.x}, ${location.y}).`;
-  } else {
-    messageText = `${monsterGroup.name || "Monster group"} has taken over construction of the abandoned ${structure.name || 'structure'} at (${location.x}, ${location.y})!`;
-  }
-  
-  updates[createChatMessagePath(worldId, chatMessageId)] = {
+
+  const messageText = structure.monster
+    ? `${monsterGroup.name || "Monster group"} has decided to continue building the ${structure.name || 'structure'} at (${location.x}, ${location.y}).`
+    : `${monsterGroup.name || "Monster group"} has taken over construction of the abandoned ${structure.name || 'structure'} at (${location.x}, ${location.y})!`;
+
+  ops.chat(worldId, {
     text: messageText,
     type: 'event',
     timestamp: now,
     location
-  };
-  
+  });
+
   return {
     action: 'adopt',
     structureId: structure.id,
     structureType: structure.type,
     location
-  }; }
+  };
+}
   
 
 // Export all necessary functions

@@ -695,6 +695,29 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.tickCount`, tickCount);
       // Update loot
       ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.loot`, battleLoot);
+
+      // Per-tick battle update in chat
+      const locationX = battle.locationX !== undefined ? battle.locationX : parseInt(tileKey.split(',')[0]);
+      const locationY = battle.locationY !== undefined ? battle.locationY : parseInt(tileKey.split(',')[1]);
+      const side1Name = battle.side1.name || 'Attackers';
+      const side2Name = battle.side2.name || 'Defenders';
+
+      let statusText;
+      if (newSide1Power > newSide2Power * 1.5) {
+        statusText = `${side1Name} are gaining the upper hand!`;
+      } else if (newSide2Power > newSide1Power * 1.5) {
+        statusText = `${side2Name} are holding their ground!`;
+      } else {
+        statusText = `Both sides fight on!`;
+      }
+
+      const totalCasualties = side1Casualties + side2Casualties;
+      ops.chat(worldId, {
+        text: `Battle at (${locationX}, ${locationY}) — Round ${tickCount}. ${statusText}${totalCasualties > 0 ? ` (${totalCasualties} casualties)` : ''}`,
+        type: 'event',
+        timestamp: Date.now(),
+        location: { x: locationX, y: locationY }
+      });
     } else {
       console.log(`Battle ${battleId} ending after ${tickCount} ticks. Power levels: Side 1: ${newSide1Power}, Side 2: ${newSide2Power}`);
 
@@ -710,6 +733,20 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         ops,
         tile // Pass the tile parameter to access existing items
       });
+
+      // Grant first_victory achievement to players on the winning side
+      const winningSurviving = winner === 1 ? side1Surviving : winner === 2 ? side2Surviving : [];
+      const battleEndTime = Date.now();
+      for (const groupId of winningSurviving) {
+        const group = tile.groups?.[groupId];
+        if (!group?.units) continue;
+        for (const unit of Object.values(group.units)) {
+          if (unit.type === 'player' && unit.id) {
+            ops.player(unit.id, worldId, 'achievements.first_victory', true);
+            ops.player(unit.id, worldId, 'achievements.first_victory_date', battleEndTime);
+          }
+        }
+      }
 
       // Generate side names for chat message
       const side1Name = battle.side1.name || 'Attackers';
