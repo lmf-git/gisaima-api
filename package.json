@@ -11,5 +11,6 @@
     "gisaima-shared": "lmf-git/gisaima-v3-shared#47b8f11178814935e11fe21faad96f2be1bc3912",
     "mongodb": "^6.0.0",
     "ws": "^8.0.0"
-  }
+  },
+  "packageManager": "yarn@4.13.0"
 }
