@@ -17,8 +17,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { MongoClient } from 'mongodb';
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
-const DB_NAME   = process.env.DB_NAME   || 'Gisaima';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/gisaima';
 const backupPath = process.argv[2]
   ? resolve(process.argv[2])
   : resolve(new URL('.', import.meta.url).pathname, '../../web/backup.json');
@@ -26,12 +25,12 @@ const backupPath = process.argv[2]
 async function seed() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
-  const db = client.db(DB_NAME);
+  const db = client.db(); // Uses the DB name from the URI
 
   const raw    = readFileSync(backupPath, 'utf8');
   const backup = JSON.parse(raw);
 
-  console.log(`Seeding from ${backupPath} into ${DB_NAME}…`);
+  console.log(`Seeding from ${backupPath} into ${db.databaseName}…`);
 
   // -------------------------------------------------------------------------
   // Worlds + Chunks
