@@ -12,12 +12,13 @@
  *   }
  */
 
+import 'dotenv/config';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { MongoClient } from 'mongodb';
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
-const DB_NAME   = process.env.DB_NAME   || 'gisaima';
+const DB_NAME   = process.env.DB_NAME   || 'Gisaima';
 const backupPath = process.argv[2]
   ? resolve(process.argv[2])
   : resolve(new URL('.', import.meta.url).pathname, '../../web/backup.json');

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { createServer } from 'http';
 import { connect, getDb } from './db/connection.js';
 import { attachWss } from './core/ws.js';

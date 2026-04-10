@@ -11,7 +11,7 @@ import { promisify } from 'util';
 const scryptAsync = promisify(scrypt);
 
 const JWT_SECRET     = process.env.JWT_SECRET     || 'change-me-in-production';
-const TOKEN_TTL_SECS = Number(process.env.TOKEN_TTL_SECS) || 60 * 60 * 24 * 30; // 30 days
+const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days
 
 // ---------------------------------------------------------------------------
 // Password helpers (scrypt — safe, no external deps)
