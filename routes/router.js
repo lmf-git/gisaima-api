@@ -31,6 +31,9 @@ export async function route(db, req, body) {
   const p = new URL(req.url, 'http://localhost').pathname.replace(/\/$/, '') || '/';
   const [, s1, s2, s3, s4] = p.split('/');
 
+  // ── Healthcheck ───────────────────────────────────────────────────────────
+  if (method === 'GET' && p === '/') return { ok: true };
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   if (method === 'POST' && p === '/auth/guest')    return handleGuestLogin(db, req, body);
   if (method === 'POST' && p === '/auth/register') return handleRegister(db, req, body);
