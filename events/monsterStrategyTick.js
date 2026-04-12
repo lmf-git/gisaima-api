@@ -695,7 +695,7 @@ export async function executeMonsterStrategy(
       actionPool.push({
         name: 'build_structure',
         weight: 0.4 * (weights?.build || 1.0),
-        execute: async () => await buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan, chunks)
+        execute: async () => await buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan, chunks, terrainGenerator)
       });
     }
 

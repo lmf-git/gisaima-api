@@ -11,7 +11,8 @@ import {
   consumeResourcesFromItems,
   createMonsterConstructionMessage,
   generateMonsterId,
-  isSuitableForMonsterBuilding
+  isSuitableForMonsterBuilding,
+  isWaterTile
 } from '../_monsters.mjs';
 
 
@@ -28,7 +29,7 @@ const NEARBY_DISTANCE = 10; // Distance considered "nearby" for structure densit
  * @param {object} chunks - Pre-loaded chunks data
  * @returns {Promise<boolean>} True if the location is suitable
  */
-async function isLocationSuitableForBuilding(db, worldId, location, worldScan, chunks) {
+async function isLocationSuitableForBuilding(db, worldId, location, worldScan, chunks, terrainGenerator = null) {
   // Get the chunk and tile keys
   const chunkX = Math.floor(location.x / 20);
   const chunkY = Math.floor(location.y / 20);
@@ -43,7 +44,12 @@ async function isLocationSuitableForBuilding(db, worldId, location, worldScan, c
     }
     
     const tileData = chunks[chunkKey][tileKey];
-    
+
+    // Never build on water tiles
+    if (terrainGenerator && isWaterTile(location.x, location.y, terrainGenerator)) {
+      return false;
+    }
+
     // Use the comprehensive isSuitableForMonsterBuilding check
     if (!tileData || !isSuitableForMonsterBuilding(tileData)) {
       return false;
@@ -120,7 +126,7 @@ async function isLocationSuitableForBuilding(db, worldId, location, worldScan, c
  * @param {object} chunks - Pre-loaded chunks data
  * @returns {object} Action result
  */
-export async function buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan = null, chunks) {
+export async function buildMonsterStructure(db, worldId, monsterGroup, location, ops, now, worldScan = null, chunks, terrainGenerator = null) {
   // Get personality for decision making
   const personality = monsterGroup.personality || { id: 'BALANCED' };
 
@@ -137,7 +143,7 @@ export async function buildMonsterStructure(db, worldId, monsterGroup, location,
   const buildLocation = determineBuildLocation(location, scanData, personality);
 
   // Check if location is suitable - chunks parameter is now required
-  const isSuitable = await isLocationSuitableForBuilding(db, worldId, buildLocation, scanData, chunks);
+  const isSuitable = await isLocationSuitableForBuilding(db, worldId, buildLocation, scanData, chunks, terrainGenerator);
   if (!isSuitable) {
     return { action: null, reason: 'unsuitable_location' };
   }

@@ -542,9 +542,9 @@ async function createNewMonsterGroup(
   // DEBUG: Log biome information for spawn location
   console.log(`[BIOME_DEBUG] Spawn location: (${location.x}, ${location.y}) | Biome: ${biome} | Water: ${isWaterLocation ? 'Yes' : 'No'}`);
   console.log(`[BIOME_DEBUG] Terrain details: ${JSON.stringify({
-    elevation: terrainData.elevation || 'unknown',
-    moisture: terrainData.moisture || 'unknown',
-    biomeId: terrainData.biome.id || 'unknown',
+    elevation: terrainData.height ?? 'unknown',
+    moisture: terrainData.moisture ?? 'unknown',
+    biomeId: terrainData.biome.name || 'unknown',
     riverValue: terrainData.riverValue || 0,
     lakeValue: terrainData.lakeValue || 0,
   })}`);
