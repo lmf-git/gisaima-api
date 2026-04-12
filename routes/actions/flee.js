@@ -34,6 +34,8 @@ export async function flee({ uid, data, db }) {
   ops.chat(worldId, {
     text: `${group.name || 'A group'} is attempting to flee from battle at (${x}, ${y})!`,
     type: 'event',
+    category: 'player',
+    userId: uid,
     timestamp: now,
     tickCount: currentTick,
     location: { x, y }

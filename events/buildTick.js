@@ -41,6 +41,7 @@ function completeStructure(worldId, ops, chunkKey, tileKey, tile, now) {
   ops.chat(worldId, {
     text: `${structure.name} has been completed at (${x}, ${y})`,
     type: 'event',
+    category: structure.monster === true ? 'monster' : 'player',
     timestamp: now,
     userId: structure.owner || 'system',
     userName: structure.ownerName || (structure.monster === true ? 'Monsters' : 'Unknown'),

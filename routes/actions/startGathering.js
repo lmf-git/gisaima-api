@@ -32,6 +32,8 @@ export async function startGathering({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, 2);
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${group.name} has started gathering in ${biome} biome at (${locationX},${locationY})`,
     timestamp: now,
     location: { x: locationX, y: locationY }

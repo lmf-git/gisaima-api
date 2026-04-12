@@ -48,7 +48,7 @@ export async function joinBattle({ uid, data, db }) {
   ops.player(uid, worldId, 'achievements.battle_joiner_date', now);
   ops.chat(worldId, {
     text: `${groupName} has joined the battle at (${locationX}, ${locationY}) on ${sideName}'s side!`,
-    type: 'event', timestamp: now, location: { x: locationX, y: locationY }
+    type: 'event', category: 'player', userId: uid, timestamp: now, location: { x: locationX, y: locationY }
   });
 
   await ops.flush(db);

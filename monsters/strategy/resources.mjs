@@ -31,6 +31,7 @@ export async function startMonsterGathering(db, worldId, monsterGroup, ops, now,
   ops.chat(worldId, {
     text: `${monsterGroup.name || "Monster group"} is gathering resources in the ${biome}.`,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: {
       x: parseInt(tileKey.split(',')[0]),

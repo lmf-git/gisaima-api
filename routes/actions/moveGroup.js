@@ -76,6 +76,8 @@ export async function moveGroup({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, now + tickMs);
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${group.name || 'Unnamed group'} is setting out from (${fromX},${fromY}) to (${toX},${toY})`,
     timestamp: now,
     location: { x: fromX, y: fromY }

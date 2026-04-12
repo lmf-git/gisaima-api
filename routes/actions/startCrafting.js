@@ -100,7 +100,7 @@ export async function startCrafting({ uid, data, db }) {
   ops.chat(worldId, {
     location: { x, y },
     text: `${player.displayName} started crafting ${recipe.result.name}.`,
-    timestamp: now, type: 'event'
+    timestamp: now, type: 'event', category: 'player', userId: uid
   });
 
   await ops.flush(db);

@@ -19,11 +19,18 @@ const subscriptions = new Map();
 
 let _wss;
 
+// Heroku kills WebSocket connections idle for >55 s (H15 error).
+// Ping every 30 s to keep connections alive; close any that miss a pong.
+const PING_INTERVAL_MS = 30_000;
+
 export function attachWss(server) {
   _wss = new WebSocketServer({ server });
 
   _wss.on('connection', ws => {
     subscriptions.set(ws, new Set());
+    ws.isAlive = true;
+
+    ws.on('pong', () => { ws.isAlive = true; });
 
     ws.on('message', raw => {
       try {
@@ -37,6 +44,18 @@ export function attachWss(server) {
     ws.on('close', () => subscriptions.delete(ws));
     ws.on('error', () => subscriptions.delete(ws));
   });
+
+  // Heartbeat: ping all clients every 30 s, terminate any that don't pong back.
+  const heartbeat = setInterval(() => {
+    if (!_wss) { clearInterval(heartbeat); return; }
+    for (const ws of _wss.clients) {
+      if (!ws.isAlive) { ws.terminate(); continue; }
+      ws.isAlive = false;
+      ws.ping();
+    }
+  }, PING_INTERVAL_MS);
+
+  _wss.on('close', () => clearInterval(heartbeat));
 }
 
 function handleClientMessage(ws, msg) {

@@ -45,6 +45,8 @@ export async function demobiliseUnits({ uid, data, db }) {
   });
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${group.name || 'Group'} is demobilizing at (${locationX},${locationY})`,
     timestamp: now,
     location: { x: locationX, y: locationY }

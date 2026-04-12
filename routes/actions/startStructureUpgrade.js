@@ -66,7 +66,7 @@ export async function startStructureUpgrade({ uid, data, db }) {
   ops.chat(worldId, {
     location: { x, y },
     text: `${player.displayName} started upgrading a ${structure.name || structure.type} from level ${currentLevel} to ${nextLevel}.`,
-    timestamp: now, type: 'event'
+    timestamp: now, type: 'event', category: 'player', userId: uid
   });
   if (isOwner) ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, updatedShared);
 

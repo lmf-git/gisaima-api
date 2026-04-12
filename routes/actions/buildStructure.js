@@ -72,6 +72,8 @@ export async function buildStructure({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`,  updatedItems);
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${structureName} construction has begun at (${tileX},${tileY})`,
     timestamp: now, location: { x: tileX, y: tileY }
   });

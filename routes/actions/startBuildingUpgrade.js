@@ -72,7 +72,7 @@ export async function startBuildingUpgrade({ uid, data, db }) {
   ops.chat(worldId, {
     location: { x, y },
     text: `${player.displayName} started upgrading a ${building.name || building.type} from level ${currentLevel} to ${nextLevel}.`,
-    timestamp: now, type: 'event'
+    timestamp: now, type: 'event', category: 'player', userId: uid
   });
 
   await ops.flush(db);

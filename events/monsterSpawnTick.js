@@ -316,6 +316,7 @@ async function spawnMonstersAtStructures(worldId, monsterStructures, existingMon
     ops.chat(worldId, {
       text: `A group of ${personality.emoji || ''} ${monsterData.name} has emerged from the ${structureData.structure.name} at (${structureData.x}, ${structureData.y})!`,
       type: 'event',
+      category: 'monster',
       timestamp: now,
       location: {
         x: structureData.x,
@@ -808,6 +809,7 @@ export async function mergeMonsterGroups(db, worldId, groups, ops, now) {
   ops.chat(worldId, {
     text: `Monster groups have merged into a larger ${newName} at (${location.x}, ${location.y})!`,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location
   });

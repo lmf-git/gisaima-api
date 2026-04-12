@@ -36,6 +36,7 @@ export async function cancelMovement({ uid, data, db }) {
   ops.chat(worldId, {
     text: `${group.name || 'Unnamed group'} has stopped their journey at (${x},${y})`,
     type: 'event',
+    category: 'player',
     timestamp: now,
     userId: uid,
     userName: group.name || 'Unknown',

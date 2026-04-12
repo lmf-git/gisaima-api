@@ -59,6 +59,8 @@ export async function unloadGroup({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups`, updatedGroups);
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${passengerGroup.name || 'A group'} has disembarked from ${boatGroup.name || 'a boat'} at (${tileX},${tileY})`,
     timestamp: Date.now(),
     location: { x: tileX, y: tileY }

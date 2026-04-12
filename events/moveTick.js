@@ -56,6 +56,8 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
     ops.chat(worldId, {
       text: `${group.name || 'Unnamed force'} completed their journey from (${startPoint.x},${startPoint.y}) to (${endPoint.x},${endPoint.y})`,
       type: 'event',
+      category: group.type === 'monster' ? 'monster' : 'player',
+      ...(group.type !== 'monster' && group.owner ? { userId: group.owner } : {}),
       timestamp: now,
       location: { x: endPoint.x, y: endPoint.y }
     });
@@ -102,6 +104,8 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
       ops.chat(worldId, {
         text: `${group.name || 'Unnamed force'} has arrived at (${nextPoint.x},${nextPoint.y})${nextIndex < group.movementPath.length - 1 ? ' and continues their journey' : ''}`,
         type: 'event',
+        category: group.type === 'monster' ? 'monster' : 'player',
+        ...(group.type !== 'monster' && group.owner ? { userId: group.owner } : {}),
         timestamp: now,
         location: { x: nextPoint.x, y: nextPoint.y }
       });

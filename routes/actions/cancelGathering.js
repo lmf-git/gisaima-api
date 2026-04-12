@@ -33,6 +33,7 @@ export async function cancelGathering({ uid, data, db }) {
   ops.chat(worldId, {
     text: `${group.name || 'Unnamed group'} has stopped gathering resources at (${locationX},${locationY})`,
     type: 'event',
+    category: 'player',
     timestamp: now,
     userId: uid,
     userName: group.ownerName || group.name || 'Unknown',

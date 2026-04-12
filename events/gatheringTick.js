@@ -52,6 +52,7 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   ops.chat(worldId, {
     text: `${group.name || 'Unnamed group'} gathered resources in ${biome} biome at (${x}, ${y})${itemsList.length ? ': ' + itemsList.join(', ') : ''}`,
     type: 'event',
+    category: 'player',
     timestamp: now,
     location: { x, y }
   });

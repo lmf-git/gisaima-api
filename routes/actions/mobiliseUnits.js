@@ -83,6 +83,8 @@ export async function mobiliseUnits({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups`, updatedGroups);
   ops.chat(worldId, {
     type: 'system',
+    category: 'player',
+    userId: uid,
     text: `${name.trim()} is being mobilized at (${tileX},${tileY})`,
     timestamp: now, location: { x: tileX, y: tileY }
   });

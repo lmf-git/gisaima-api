@@ -205,6 +205,7 @@ export async function buildMonsterStructure(db, worldId, monsterGroup, location,
   ops.chat(worldId, {
     text: createMonsterConstructionMessage(monsterGroup, 'build', structureData.name, buildLocation),
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: { x: location.x, y: location.y }
   });
@@ -467,6 +468,7 @@ export async function upgradeMonsterStructure(db, worldId, monsterGroup, structu
   ops.chat(worldId, {
     text: `${monsterGroup.name || "Monsters"} have upgraded their ${structure.name || "structure"} to level ${newLevel}!`,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: {
       x: parseInt(tileKey.split(',')[0]),
@@ -574,6 +576,7 @@ export async function demobilizeAtMonsterStructure(db, worldId, monsterGroup, st
   ops.chat(worldId, {
     text: `${monsterGroup.name || "Monster group"} is demobilizing at ${structure.name || 'their structure'} at (${location.x}, ${location.y}).`,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location
   });
@@ -781,6 +784,7 @@ export async function adoptAbandonedStructure(db, worldId, monsterGroup, structu
   ops.chat(worldId, {
     text: messageText,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location
   });

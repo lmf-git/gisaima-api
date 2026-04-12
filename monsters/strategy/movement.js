@@ -323,6 +323,7 @@ export async function moveMonsterTowardsTarget(
   ops.chat(worldId, {
     text: chatMessage,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: {
       x: location.x,

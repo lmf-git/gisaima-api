@@ -86,7 +86,7 @@ export async function recruitUnits({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.structure.banks.${uid}`,                      updatedBank);
   ops.chat(worldId, {
     text: `${quantity} ${unitDef.name} units being recruited at (${x}, ${y})`,
-    type: 'event', timestamp: now, location: { x, y }
+    type: 'event', category: 'player', userId: uid, timestamp: now, location: { x, y }
   });
   if (isOwned) ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, updatedShared);
 

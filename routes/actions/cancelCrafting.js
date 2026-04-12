@@ -37,7 +37,7 @@ export async function cancelCrafting({ uid, data, db }) {
   ops.chat(worldId, {
     location: crafting.structureLocation,
     text: `${crafting.playerName} canceled crafting ${crafting.result.name}.`,
-    timestamp: now, type: 'event'
+    timestamp: now, type: 'event', category: 'player', userId: uid
   });
 
   await ops.flush(db);

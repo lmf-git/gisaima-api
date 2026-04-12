@@ -122,6 +122,7 @@ export async function mergeMonsterGroupsOnTile(db, worldId, monsterGroup, mergea
   ops.chat(worldId, {
     text: `${monsterGroup.name || 'Monster group'} has grown in strength, absorbing ${mergeableGroups.length} other monster groups!`,
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location
   });
@@ -239,6 +240,7 @@ export async function initiateAttackOnPlayers(db, worldId, monsterGroup, targetG
   ops.chat(worldId, {
     text: createBattleActionMessage(monsterGroup, 'attack', 'player', targetName, location),
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: { x, y }
   });
@@ -362,6 +364,7 @@ export async function initiateAttackOnStructure(db, worldId, monsterGroup, struc
   ops.chat(worldId, {
     text: createBattleActionMessage(monsterGroup, 'attack', 'structure', structureName, location),
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: { x, y }
   });
@@ -522,6 +525,7 @@ export async function initiateAttackOnMonsters(db, worldId, monsterGroup, target
   ops.chat(worldId, {
     text: createBattleActionMessage(monsterGroup, 'attack', 'monster', targetName, location),
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location: { x, y }
   });
@@ -597,6 +601,7 @@ export async function joinExistingBattle(db, worldId, monsterGroup, tileData, op
   ops.chat(worldId, {
     text: createBattleActionMessage(monsterGroup, 'join', joiningSide, '', location),
     type: 'event',
+    category: 'monster',
     timestamp: now,
     location
   });

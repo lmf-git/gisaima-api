@@ -75,7 +75,7 @@ export async function attack({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${locationKey}.battles.${battleId}`, battleData);
   ops.chat(worldId, {
     text: `Battle has begun at (${locationX}, ${locationY})! ${battleData.side1.name} is attacking ${battleData.side2.name}!`,
-    type: 'event', timestamp: now, location: { x: locationX, y: locationY }
+    type: 'event', category: 'player', userId: uid, timestamp: now, location: { x: locationX, y: locationY }
   });
 
   for (const g of attackerGroups) {

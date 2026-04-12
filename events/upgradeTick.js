@@ -82,7 +82,8 @@ async function applyUpgrade(worldId, upgrade, worldData, db, now) {
     location: { x, y },
     text: `A structure at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
     timestamp: now,
-    type: 'system'
+    type: 'system',
+    category: 'player'
   });
 
   if (upgrade.startedBy) {
@@ -128,7 +129,8 @@ async function applyBuildingUpgrade(worldId, upgrade, worldData, db, now) {
     location: { x, y },
     text: `A ${building.name || building.type} at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
     timestamp: now,
-    type: 'system'
+    type: 'system',
+    category: 'player'
   });
 
   if (upgrade.startedBy) {
