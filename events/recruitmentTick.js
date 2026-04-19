@@ -40,6 +40,8 @@ export function processRecruitment(worldId, ops, chunkKey, tileKey, tile, now) {
       icon,
       owner,
       createdAt: now,
+      level: 1,
+      xp: 0,
       category:    unitDefinition.category    || 'player',
       description: unitDefinition.description || `Group of ${unitName}`
     };

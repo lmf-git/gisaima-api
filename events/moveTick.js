@@ -68,7 +68,7 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
   const nextChunkKey = getChunkKey(nextPoint.x, nextPoint.y);
   const nextTileKey  = `${nextPoint.x},${nextPoint.y}`;
   const worldSpeed   = worldInfo?.speed || 1.0;
-  const moveInterval = Math.round(60000 / worldSpeed);
+  const moveInterval = Math.round(2 * 60000 / worldSpeed);
   const nextMoveTime = now + moveInterval;
 
   if (nextChunkKey !== chunkKey || nextTileKey !== tileKey) {

@@ -4,6 +4,18 @@
 
 import { merge } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
+import UNITS from 'gisaima-shared/definitions/UNITS.js';
+
+function groupCapacity(group) {
+  if (!group.units) return 0;
+  const units = Array.isArray(group.units) ? group.units : Object.values(group.units);
+  return units.reduce((sum, u) => sum + (UNITS[u.type]?.carryCapacity ?? 5), 0);
+}
+
+function groupItemCount(items) {
+  if (!items) return 0;
+  return Object.values(items).reduce((s, q) => s + q, 0);
+}
 
 export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId, tile, now, terrainGenerator = null) {
   if (group.status === 'cancellingGather') return false;
@@ -38,11 +50,25 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   }
 
   const gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
+  const mergedItems   = group.items ? merge(group.items, gatheredItems) : gatheredItems;
+  const capacity      = groupCapacity(group);
+  const itemCount     = groupItemCount(mergedItems);
+  const gatherUntilFull = group.gatherUntilFull === true;
+  const atCapacity    = capacity > 0 && itemCount >= capacity;
 
-  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`,                  group.items ? merge(group.items, gatheredItems) : gatheredItems);
-  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'idle');
-  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         null);
-  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, null);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`, mergedItems);
+
+  if (gatherUntilFull && !atCapacity) {
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, group.gatherTickDuration || 1);
+  } else {
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'idle');
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, null);
+    if (gatherUntilFull) {
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherUntilFull`,      null);
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherTickDuration`,   null);
+    }
+  }
 
   const itemsList = Object.entries(gatheredItems).map(([code, qty]) => {
     const def = ITEMS[code];

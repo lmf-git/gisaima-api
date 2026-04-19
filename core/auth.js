@@ -5,8 +5,10 @@
  * Token payload: { uid, isGuest, iat, exp }
  */
 
-import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto/promises';
+import { createHmac, randomBytes, scrypt as scryptSync, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 
+const scrpt = promisify(scryptSync);
 
 const JWT_SECRET     = process.env.JWT_SECRET     || 'change-me-in-production';
 const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days

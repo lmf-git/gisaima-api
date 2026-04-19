@@ -6,7 +6,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
 
 export async function startGathering({ uid, data, db }) {
-  const { groupId, locationX, locationY, worldId } = data;
+  const { groupId, locationX, locationY, worldId, gatherUntilFull = false } = data;
 
   if (!groupId || locationX === undefined || locationY === undefined || !worldId) {
     throw err(400, 'Missing required parameters');
@@ -25,16 +25,21 @@ export async function startGathering({ uid, data, db }) {
 
   const biome = tile.biome?.name || 'plains';
   const now   = Date.now();
+  const GATHER_TICKS = 2;
 
   const ops = new Ops();
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'gathering');
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         biome);
-  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, 2);
+  ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, GATHER_TICKS);
+  if (gatherUntilFull) {
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherUntilFull`,      true);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherTickDuration`,   GATHER_TICKS);
+  }
   ops.chat(worldId, {
     type: 'system',
     category: 'player',
     userId: uid,
-    text: `${group.name} has started gathering in ${biome} biome at (${locationX},${locationY})`,
+    text: `${group.name} has started gathering${gatherUntilFull ? ' until full' : ''} in ${biome} biome at (${locationX},${locationY})`,
     timestamp: now,
     location: { x: locationX, y: locationY }
   });
@@ -51,7 +56,7 @@ export async function startGathering({ uid, data, db }) {
     );
   }
 
-  return { success: true, message: 'Gathering started', completesIn: 2 };
+  return { success: true, message: 'Gathering started', completesIn: GATHER_TICKS };
 }
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }

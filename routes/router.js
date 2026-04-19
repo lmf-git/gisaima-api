@@ -3,6 +3,8 @@ import { handleGuestLogin, handleRegister, handleLogin, handleMe,
 import { getWorlds, getWorld, getChunk, getWorldChat } from './worlds.js';
 import { getPlayerWorlds, getPlayerWorldState }         from './players.js';
 import { postChat }                                     from './chat.js';
+import { getReports, postReportRead }                   from './reports.js';
+import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
 
 import attack                from './actions/attack.js';
 import buildStructure        from './actions/buildStructure.js';
@@ -34,39 +36,38 @@ export async function route(db, req, body) {
   // ── Healthcheck ───────────────────────────────────────────────────────────
   if (method === 'GET' && p === '/') return { ok: true };
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // ── Auth (public) ─────────────────────────────────────────────────────────
   if (method === 'POST' && p === '/auth/guest')    return handleGuestLogin(db, req, body);
   if (method === 'POST' && p === '/auth/register') return handleRegister(db, req, body);
   if (method === 'POST' && p === '/auth/login')    return handleLogin(db, req, body);
   if (method === 'GET'  && p === '/auth/me')       return handleMe(db, req);
 
-  // ── Worlds ────────────────────────────────────────────────────────────────
+  // ── Public world reads ────────────────────────────────────────────────────
   if (method === 'GET' && p === '/worlds')                           return getWorlds(db);
   if (method === 'GET' && s1 === 'worlds' && s2 && !s3)             return getWorld(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'chunks' && s4) return getChunk(db, s2, decodeURIComponent(s4));
   if (method === 'GET' && s1 === 'worlds' && s3 === 'chat')         return getWorldChat(db, s2);
-  if (method === 'POST' && s1 === 'worlds' && s3 === 'chat') {
-    const auth = getAuth(req);
-    if (!auth) throw apiError(401, 'not authenticated');
-    return postChat(db, auth, s2, body);
-  }
+  if (method === 'GET' && s1 === 'worlds' && s3 === 'rankings')     return getWorldRankings(db, s2);
 
-  // ── Players ───────────────────────────────────────────────────────────────
-  if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && !s4) {
-    const auth = getAuth(req);
-    if (!auth) throw apiError(401, 'not authenticated');
-    return getPlayerWorlds(db, auth, s2);
-  }
-  if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && s4) {
-    const auth = getAuth(req);
-    if (!auth) throw apiError(401, 'not authenticated');
-    return getPlayerWorldState(db, auth, s2, s4);
-  }
+  // ── Protected routes (single auth check) ─────────────────────────────────
+  const auth = getAuth(req);
+  if (!auth) throw apiError(401, 'not authenticated');
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // Worlds
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'chat')                         return postChat(db, auth, s2, body);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'tribes')                       return getTribes(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && !s4)                return postCreateTribe(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && s4 === 'join')      return postJoinTribe(db, auth, s2, body.tribeId);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && s4 === 'leave')     return postLeaveTribe(db, auth, s2);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'reports' && !s4)               return getReports(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'reports' && s4)                return postReportRead(db, auth, s2, s4);
+
+  // Players
+  if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && !s4) return getPlayerWorlds(db, auth, s2);
+  if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && s4)  return getPlayerWorldState(db, auth, s2, s4);
+
+  // Actions
   if (method === 'POST' && s1 === 'actions') {
-    const auth = getAuth(req);
-    if (!auth) throw apiError(401, 'not authenticated');
     const ctx = { uid: auth.uid, isGuest: auth.isGuest, data: body, db };
 
     if (s2 === 'attack')                return attack(ctx);

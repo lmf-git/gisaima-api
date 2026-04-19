@@ -734,6 +734,34 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         tile // Pass the tile parameter to access existing items
       });
 
+      // Award XP and track kills for surviving units on the winning side
+      if (winner !== 0) {
+        const enemyCasualties = winner === 1 ? side2Casualties : side1Casualties;
+        const xpReward = Math.max(10, enemyCasualties * 5 + tickCount * 2);
+        const winningGroups = winner === 1 ? side1Surviving : side2Surviving;
+        for (const groupId of winningGroups) {
+          const group = tile.groups?.[groupId];
+          if (!group?.units) continue;
+          for (const [unitId, unit] of Object.entries(group.units)) {
+            if (unit.type === 'player' && unit.id) {
+              ops.playerInc(unit.id, worldId, 'xp', xpReward);
+              ops.playerInc(unit.id, worldId, 'kills', enemyCasualties);
+            } else if (unit.type !== 'player') {
+              const currentXP = unit.xp || 0;
+              const newXP = currentXP + xpReward;
+              const currentLevel = unit.level || 1;
+              const xpToNextLevel = currentLevel * 100;
+              if (newXP >= xpToNextLevel) {
+                ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.units.${unitId}.level`, currentLevel + 1);
+                ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.units.${unitId}.xp`, newXP - xpToNextLevel);
+              } else {
+                ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.units.${unitId}.xp`, newXP);
+              }
+            }
+          }
+        }
+      }
+
       // Grant first_victory achievement to players on the winning side
       const winningSurviving = winner === 1 ? side1Surviving : winner === 2 ? side2Surviving : [];
       const battleEndTime = Date.now();
@@ -772,11 +800,39 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         text: `Battle at (${locationX}, ${locationY}) has ended. ${resultText}`,
         type: 'event',
         timestamp: now,
-        location: {
-          x: locationX,
-          y: locationY
-        }
+        location: { x: locationX, y: locationY }
       });
+
+      // Create battle reports for involved players
+      if (winner !== 0) {
+        const winnerSurviving  = winner === 1 ? side1Surviving : side2Surviving;
+        const loserGroups      = winner === 1 ? Object.keys(side1Groups || {}) : Object.keys(side2Groups || {});
+        const winnerCasualties = winner === 1 ? side1Casualties : side2Casualties;
+        const loserCasualties  = winner === 1 ? side2Casualties : side1Casualties;
+        const winnerName       = winner === 1 ? side1Name : side2Name;
+        const loserName        = winner === 1 ? side2Name : side1Name;
+        const loc              = { x: locationX, y: locationY };
+
+        const winnerPlayerIds = _collectGroupOwners(winnerSurviving, tile.groups);
+        const loserPlayerIds  = _collectGroupOwners(loserGroups, tile.groups);
+
+        for (const pid of winnerPlayerIds) {
+          ops.report(pid, worldId, {
+            type: 'battle_victory',
+            title: `Victory at (${locationX}, ${locationY})`,
+            summary: `${winnerName} defeated ${loserName} after ${tickCount} round${tickCount !== 1 ? 's' : ''}. ${loserCasualties} enemy casualties, ${winnerCasualties} friendly casualties.`,
+            location: loc,
+          });
+        }
+        for (const pid of loserPlayerIds) {
+          ops.report(pid, worldId, {
+            type: 'battle_defeat',
+            title: `Defeat at (${locationX}, ${locationY})`,
+            summary: `${loserName} was defeated by ${winnerName} after ${tickCount} round${tickCount !== 1 ? 's' : ''}. ${loserCasualties} casualties.`,
+            location: loc,
+          });
+        }
+      }
 
       if (tile && tile.groups) {
         // Log battle result for debugging
@@ -893,69 +949,72 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           const newHealth = currentHealth - damageAmount;
           console.log(`Structure health reduced from ${currentHealth} to ${newHealth}`);
 
-          // Check if the structure should be destroyed - minimum 2 ticks for any structure
+          // Check if the structure should be destroyed/captured - minimum 2 ticks for any structure
           if (newHealth <= 0 && tickCount > 1) {
-              // Flag that structure will be destroyed
-              willDestroyStructure = true;
+              const locX = battle.locationX ?? parseInt(tileKey.split(',')[0]);
+              const locY = battle.locationY ?? parseInt(tileKey.split(',')[1]);
+              const structureName = structure.name || `${structureType.charAt(0).toUpperCase() + structureType.slice(1)}`;
+              const isPlayerStructure = structure.owner && !structure.monster;
+              const capturer = isPlayerStructure ? _findCaptureOwner(side1Surviving, tile.groups) : null;
 
-              // Structure is destroyed
-              ops.chunk(worldId, chunkKey, `${tileKey}.structure`, null);
+              if (capturer) {
+                // CAPTURE — transfer ownership instead of destroying
+                const captureHealth = Math.max(1, Math.floor(structureDurability * 0.15));
+                const prevOwner = structure.owner;
+                const prevOwnerName = structure.ownerName || prevOwner;
 
-              // Handle players on the destroyed structure
-              if (tile.players) {
-                const now = Date.now();
-                const playersCount = Object.keys(tile.players).length;
-                let killedPlayersCount = 0;
-                const killedPlayerNames = [];
-
-                console.log(`Structure destroyed - checking ${playersCount} players on tile`);
-
-                // Process each player on the tile where structure was destroyed
-                Object.entries(tile.players).forEach(([playerId, playerData]) => {
-                  // Set alive status to false
-                  ops.player(playerId, worldId, 'alive', false);
-
-                  // Clear their group reference
-                  ops.player(playerId, worldId, 'inGroup', null);
-
-                  // Add a death message to the player's record
-                  ops.player(playerId, worldId, 'lastMessage', {
-                    text: "Died in structure destruction",
-                    timestamp: now
-                  });
-
-                  // CRITICAL FIX: Mark lastLocation with death info instead of removing it
-                  // This maintains the death location for history purposes
-                  ops.player(playerId, worldId, 'lastLocation', null);
-
-                  // CRITICAL FIX: Remove player from the tile
-                  ops.chunk(worldId, chunkKey, `${tileKey}.players.${playerId}`, null);
-
-                  killedPlayersCount++;
-                  if (playerData.displayName) {
-                    killedPlayerNames.push(playerData.displayName);
-                  }
-
-                  console.log(`Player ${playerId} (${playerData.displayName || 'unknown'}) marked as dead after structure destruction`);
-                });
-
-                // Create a single chat message for the structure destruction and all player deaths
-                const structureName = structure.name || `${structureType.charAt(0).toUpperCase() + structureType.slice(1)}`;
-                let deathMessage = `${structureName} at (${battle.locationX}, ${battle.locationY}) has been destroyed!`;
-
-                if (killedPlayersCount > 0) {
-                  deathMessage += ` ${killedPlayersCount} player${killedPlayersCount !== 1 ? 's' : ''} perished in the destruction.`;
-                }
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.owner`, capturer.uid);
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.ownerName`, capturer.displayName);
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.health`, captureHealth);
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.recruitmentQueue`, null);
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure.battleId`, null);
 
                 ops.chat(worldId, {
-                  text: deathMessage,
-                  type: 'event',
-                  timestamp: now,
-                  location: {
-                    x: battle.locationX,
-                    y: battle.locationY
-                  }
+                  text: `${structureName} at (${locX}, ${locY}) has been captured by ${capturer.displayName}!`,
+                  type: 'event', timestamp: Date.now(), location: { x: locX, y: locY }
                 });
+                ops.report(capturer.uid, worldId, {
+                  type: 'structure_captured',
+                  title: `Captured ${structureName}`,
+                  summary: `You captured ${structureName} at (${locX}, ${locY}) from ${prevOwnerName}.`,
+                  location: { x: locX, y: locY },
+                });
+                ops.report(prevOwner, worldId, {
+                  type: 'structure_lost',
+                  title: `${structureName} Captured`,
+                  summary: `Your structure ${structureName} at (${locX}, ${locY}) was captured by ${capturer.displayName}.`,
+                  location: { x: locX, y: locY },
+                });
+                console.log(`Structure ${structureName} captured by ${capturer.displayName} from ${prevOwnerName}`);
+              } else {
+                // DESTROY (monster lairs or unowned structures)
+                willDestroyStructure = true;
+                ops.chunk(worldId, chunkKey, `${tileKey}.structure`, null);
+
+                if (tile.players) {
+                  const now = Date.now();
+                  let killedPlayersCount = 0;
+                  const killedPlayerNames = [];
+
+                  Object.entries(tile.players).forEach(([playerId, playerData]) => {
+                    ops.player(playerId, worldId, 'alive', false);
+                    ops.player(playerId, worldId, 'inGroup', null);
+                    ops.player(playerId, worldId, 'lastMessage', { text: "Died in structure destruction", timestamp: now });
+                    ops.player(playerId, worldId, 'lastLocation', null);
+                    ops.chunk(worldId, chunkKey, `${tileKey}.players.${playerId}`, null);
+                    killedPlayersCount++;
+                    if (playerData.displayName) killedPlayerNames.push(playerData.displayName);
+                  });
+
+                  let deathMessage = `${structureName} at (${locX}, ${locY}) has been destroyed!`;
+                  if (killedPlayersCount > 0) {
+                    deathMessage += ` ${killedPlayersCount} player${killedPlayersCount !== 1 ? 's' : ''} perished in the destruction.`;
+                  }
+                  ops.chat(worldId, {
+                    text: deathMessage, type: 'event', timestamp: Date.now(),
+                    location: { x: locX, y: locY }
+                  });
+                }
               }
           } else if (newHealth <= 0) {
             // Structure critically damaged but not destroyed in first tick
@@ -1101,4 +1160,35 @@ function checkSideForCriticalHits(side) {
   }
 
   return false;
+}
+
+// Find the best candidate to receive ownership after capturing a structure
+function _findCaptureOwner(survivingGroupIds, tileGroups) {
+  for (const groupId of survivingGroupIds) {
+    const group = tileGroups?.[groupId];
+    if (!group) continue;
+    for (const unit of Object.values(group.units || {})) {
+      if (unit.type === 'player' && unit.id) {
+        return { uid: unit.id, displayName: unit.displayName || `Player ${unit.id}` };
+      }
+    }
+    if (group.owner) {
+      return { uid: group.owner, displayName: group.ownerName || group.owner };
+    }
+  }
+  return null;
+}
+
+// Collect unique player/owner IDs from a list of group IDs
+function _collectGroupOwners(groupIds, tileGroups) {
+  const ids = new Set();
+  for (const groupId of groupIds) {
+    const group = tileGroups?.[groupId];
+    if (!group) continue;
+    for (const unit of Object.values(group.units || {})) {
+      if (unit.type === 'player' && unit.id) ids.add(unit.id);
+    }
+    if (group.owner) ids.add(group.owner);
+  }
+  return ids;
 }
