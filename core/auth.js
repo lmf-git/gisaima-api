@@ -5,10 +5,8 @@
  * Token payload: { uid, isGuest, iat, exp }
  */
 
-import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'crypto';
-import { promisify } from 'util';
+import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto/promises';
 
-const scryptAsync = promisify(scrypt);
 
 const JWT_SECRET     = process.env.JWT_SECRET     || 'change-me-in-production';
 const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days
@@ -19,7 +17,7 @@ const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days
 
 export async function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
-  const key  = await scryptAsync(password, salt, 64);
+  const key  = await scrypt(password, salt, 64);
   return `${salt}:${key.toString('hex')}`;
 }
 
