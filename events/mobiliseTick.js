@@ -3,11 +3,13 @@
  * Handles completing group mobilization during tick cycles
  */
 
-export function processMobilizations(worldId, ops, groups, chunkKey, tileKey, now) {
+export function processMobilizations(worldId, ops, groups, chunkKey, tileKey, now, lastTickTime = 0) {
   let mobilizationsProcessed = 0;
 
   for (const [groupId, group] of Object.entries(groups)) {
     if (group.status !== 'mobilizing') continue;
+    // Skip groups created after the previous tick — they'll complete on the next tick
+    if (group.mobilizedAt && lastTickTime && group.mobilizedAt >= lastTickTime) continue;
 
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
 

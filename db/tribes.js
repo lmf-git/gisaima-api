@@ -46,12 +46,13 @@ export async function getPlayerTribe(db, worldId, uid) {
 }
 
 export async function getRankings(db, worldId) {
-  const [players, chunks] = await Promise.all([
+  const [players, chunks, tribes] = await Promise.all([
     db.collection('players').find(
       { [`worlds.${worldId}`]: { $exists: true } },
       { projection: { _id: 1, [`worlds.${worldId}.displayName`]: 1, [`worlds.${worldId}.kills`]: 1 } }
     ).toArray(),
     db.collection('chunks').find({ worldId }, { projection: { tiles: 1 } }).toArray(),
+    db.collection('tribes').find({ worldId }).toArray(),
   ]);
 
   // Aggregate structure ownership and points from chunks
@@ -62,28 +63,54 @@ export async function getRankings(db, worldId) {
       if (!s?.owner || !s.isCenter) continue;
       if (!structureStats[s.owner]) structureStats[s.owner] = { count: 0, points: 0 };
       structureStats[s.owner].count += 1;
-      // Points: structure level + sum of all building levels
       let pts = s.level || 1;
       for (const b of Object.values(s.buildings || {})) pts += (b.level || 1);
       structureStats[s.owner].points += pts;
     }
   }
 
+  // Player rows
   const rows = players.map(p => {
     const wd = p.worlds?.[worldId] || {};
     const ss = structureStats[p._id] || { count: 0, points: 0 };
     return {
-      uid:            p._id,
-      displayName:    wd.displayName || 'Unknown',
-      kills:          wd.kills || 0,
-      structureCount: ss.count,
+      uid:             p._id,
+      displayName:     wd.displayName || 'Unknown',
+      kills:           wd.kills || 0,
+      structureCount:  ss.count,
       structurePoints: ss.points,
     };
   });
 
+  // Build quick-lookup maps for tribe aggregation
+  const killsByUid          = Object.fromEntries(rows.map(r => [r.uid, r.kills]));
+  const structureStatsByUid = Object.fromEntries(rows.map(r => [r.uid, { count: r.structureCount, points: r.structurePoints }]));
+
+  // Tribe rows — sum member stats
+  const tribeRows = tribes.map(t => {
+    let kills = 0, structureCount = 0, structurePoints = 0;
+    for (const m of (t.members || [])) {
+      kills           += killsByUid[m.uid]                     || 0;
+      structureCount  += structureStatsByUid[m.uid]?.count     || 0;
+      structurePoints += structureStatsByUid[m.uid]?.points    || 0;
+    }
+    return {
+      tribeId:         t._id.toString(),
+      name:            t.name,
+      tag:             t.tag,
+      memberCount:     (t.members || []).length,
+      kills,
+      structureCount,
+      structurePoints,
+    };
+  });
+
   return {
-    kills:      [...rows].sort((a, b) => b.kills - a.kills).slice(0, 20),
-    structures: [...rows].sort((a, b) => b.structureCount - a.structureCount).slice(0, 20),
-    points:     [...rows].sort((a, b) => b.structurePoints - a.structurePoints).slice(0, 20),
+    kills:            [...rows].sort((a, b) => b.kills - a.kills).slice(0, 20),
+    structures:       [...rows].sort((a, b) => b.structureCount - a.structureCount).slice(0, 20),
+    points:           [...rows].sort((a, b) => b.structurePoints - a.structurePoints).slice(0, 20),
+    tribeKills:       [...tribeRows].sort((a, b) => b.kills - a.kills).slice(0, 20),
+    tribeStructures:  [...tribeRows].sort((a, b) => b.structureCount - a.structureCount).slice(0, 20),
+    tribePoints:      [...tribeRows].sort((a, b) => b.structurePoints - a.structurePoints).slice(0, 20),
   };
 }

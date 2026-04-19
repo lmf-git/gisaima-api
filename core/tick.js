@@ -109,7 +109,7 @@ async function processWorld(db, worldId, worldData, now) {
 
       if (!tile.groups) continue;
 
-      processMobilizations(worldId, ops, tile.groups, chunkKey, tileKey, now);
+      processMobilizations(worldId, ops, tile.groups, chunkKey, tileKey, now, worldInfo.lastTick);
 
       for (const groupId in tile.groups) {
         const group = tile.groups[groupId];

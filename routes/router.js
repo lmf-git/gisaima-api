@@ -7,6 +7,7 @@ import { getReports, postReportRead }                   from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
 
 import attack                from './actions/attack.js';
+import equipItem             from './actions/equipItem.js';
 import buildStructure        from './actions/buildStructure.js';
 import cancelCrafting        from './actions/cancelCrafting.js';
 import cancelGathering       from './actions/cancelGathering.js';
@@ -71,6 +72,7 @@ export async function route(db, req, body) {
     const ctx = { uid: auth.uid, isGuest: auth.isGuest, data: body, db };
 
     if (s2 === 'attack')                return attack(ctx);
+    if (s2 === 'equipItem')            return equipItem(ctx);
     if (s2 === 'buildStructure')        return buildStructure(ctx);
     if (s2 === 'cancelCrafting')        return cancelCrafting(ctx);
     if (s2 === 'cancelGathering')       return cancelGathering(ctx);

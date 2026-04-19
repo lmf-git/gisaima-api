@@ -24,6 +24,10 @@ export async function mobiliseUnits({ uid, data, db }) {
     throw err(409, 'Player not found on this tile');
   }
 
+  if (_playerInActiveGroup(tile.groups, uid)) {
+    throw err(409, 'Player is already mobilising or moving');
+  }
+
   if (units.length > 0) {
     const ownedUnits = new Set();
     for (const g of Object.values(tile.groups || {})) {
@@ -39,7 +43,7 @@ export async function mobiliseUnits({ uid, data, db }) {
 
   const now        = Date.now();
   const newGroupId = `group_${now}_${Math.floor(Math.random() * 10000)}`;
-  const newGroup   = { id: newGroupId, name: name.trim(), owner: uid, status: 'mobilizing', x: tileX, y: tileY, race: race || null, units: {} };
+  const newGroup   = { id: newGroupId, name: name.trim(), owner: uid, status: 'mobilizing', mobilizedAt: now, x: tileX, y: tileY, race: race || null, units: {} };
   const motionCaps = new Set();
   let hasBoat = false, boatCapacity = 0, nonBoatCount = 0;
 
@@ -103,6 +107,16 @@ export async function mobiliseUnits({ uid, data, db }) {
 function _playerInGroups(groups, uid) {
   if (!groups) return false;
   for (const g of Object.values(groups)) {
+    if (!g.units) continue;
+    if (Object.values(g.units).some(u => u.type === 'player' && u.id === uid)) return true;
+  }
+  return false;
+}
+
+function _playerInActiveGroup(groups, uid) {
+  if (!groups) return false;
+  for (const g of Object.values(groups)) {
+    if (g.status !== 'mobilizing' && g.status !== 'moving') continue;
     if (!g.units) continue;
     if (Object.values(g.units).some(u => u.type === 'player' && u.id === uid)) return true;
   }
