@@ -60,7 +60,7 @@ export async function getRankings(db, worldId) {
   for (const chunk of chunks) {
     for (const tile of Object.values(chunk.tiles || {})) {
       const s = tile.structure;
-      if (!s?.owner || !s.isCenter) continue;
+      if (!s?.owner) continue;
       if (!structureStats[s.owner]) structureStats[s.owner] = { count: 0, points: 0 };
       structureStats[s.owner].count += 1;
       let pts = s.level || 1;

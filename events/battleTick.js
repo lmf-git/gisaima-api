@@ -1,5 +1,7 @@
 import {
   calculateGroupPower,
+  calculateGroupCombatStats,
+  calculateDefenseMultiplier,
   calculatePowerRatios,
   calculateAttrition,
   selectUnitsForCasualties,
@@ -312,8 +314,28 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     battle.side1 = updatedSide1;
     battle.side2 = updatedSide2;
 
-    let side1Attrition = calculateAttrition(side1Power, side1Ratio, side2Ratio);
-    let side2Attrition = calculateAttrition(side2Power, side2Ratio, side1Ratio);
+    // Aggregate typed combat stats for each side to compute defense multipliers
+    const zeroStats = { meleeAtk: 0, rangedAtk: 0, magicAtk: 0, meleeDef: 0, rangedDef: 0, magicDef: 0, unitCount: 0 };
+    const side1CombatStats = { ...zeroStats };
+    const side2CombatStats = { ...zeroStats };
+    for (const groupId in side1Groups) {
+      if (tile.groups?.[groupId]) {
+        const gs = calculateGroupCombatStats(tile.groups[groupId]);
+        for (const k of Object.keys(side1CombatStats)) side1CombatStats[k] += gs[k] || 0;
+      }
+    }
+    for (const groupId in side2Groups) {
+      if (tile.groups?.[groupId]) {
+        const gs = calculateGroupCombatStats(tile.groups[groupId]);
+        for (const k of Object.keys(side2CombatStats)) side2CombatStats[k] += gs[k] || 0;
+      }
+    }
+    // Each side's defense resists the opposing side's typed attacks
+    const side1DefMultiplier = calculateDefenseMultiplier(side2CombatStats, side1CombatStats);
+    const side2DefMultiplier = calculateDefenseMultiplier(side1CombatStats, side2CombatStats);
+
+    let side1Attrition = calculateAttrition(side1Power, side1Ratio, side2Ratio, side1DefMultiplier);
+    let side2Attrition = calculateAttrition(side2Power, side2Ratio, side1Ratio, side2DefMultiplier);
 
     // IMPROVED: Better stalemate handling with more randomness and luck factor
     if (side1Power > 0 && side2Power > 0 && side1Attrition === 0 && side2Attrition === 0) {
