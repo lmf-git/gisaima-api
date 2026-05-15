@@ -46,7 +46,10 @@ export async function route(db, req, body) {
   // ── Public world reads ────────────────────────────────────────────────────
   if (method === 'GET' && p === '/worlds')                           return getWorlds(db);
   if (method === 'GET' && s1 === 'worlds' && s2 && !s3)             return getWorld(db, s2);
-  if (method === 'GET' && s1 === 'worlds' && s3 === 'chunks' && s4) return getChunk(db, s2, decodeURIComponent(s4));
+  if (method === 'GET' && s1 === 'worlds' && s3 === 'chunks' && s4) {
+    const chunkAuth = getAuth(req); // optional — won't throw if absent
+    return getChunk(db, s2, decodeURIComponent(s4), chunkAuth?.uid ?? null);
+  }
   if (method === 'GET' && s1 === 'worlds' && s3 === 'chat')         return getWorldChat(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'rankings')     return getWorldRankings(db, s2);
 

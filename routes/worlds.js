@@ -1,5 +1,6 @@
 import { apiError } from '../core/auth.js';
 import { getRecentChat } from '../db/chat.js';
+import { filterTilesForPlayer } from '../lib/visibility.js';
 
 export async function getWorlds(db) {
   const worlds = await db.collection('worlds').find({}, { projection: { info: 1 } }).toArray();
@@ -12,9 +13,10 @@ export async function getWorld(db, worldId) {
   return { id: world._id, ...world.info };
 }
 
-export async function getChunk(db, worldId, chunkKey) {
-  const doc = await db.collection('chunks').findOne({ worldId, chunkKey });
-  return doc?.tiles || {};
+export async function getChunk(db, worldId, chunkKey, userId = null) {
+  const doc   = await db.collection('chunks').findOne({ worldId, chunkKey });
+  const tiles = doc?.tiles || {};
+  return userId ? filterTilesForPlayer(userId, worldId, tiles) : tiles;
 }
 
 export async function getWorldChat(db, worldId) {

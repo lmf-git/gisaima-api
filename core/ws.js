@@ -13,9 +13,13 @@
  */
 
 import { WebSocketServer } from 'ws';
+import { verifyToken } from './auth.js';
+import { filterTilesForPlayer } from '../lib/visibility.js';
 
 // subscriptions: Map<ws, Set<string>>  — channelKey per socket
 const subscriptions = new Map();
+// wsUserIds: Map<ws, string>  — authenticated userId per socket
+const wsUserIds = new Map();
 
 let _wss;
 
@@ -41,8 +45,8 @@ export function attachWss(server) {
       }
     });
 
-    ws.on('close', () => subscriptions.delete(ws));
-    ws.on('error', () => subscriptions.delete(ws));
+    ws.on('close', () => { subscriptions.delete(ws); wsUserIds.delete(ws); });
+    ws.on('error', () => { subscriptions.delete(ws); wsUserIds.delete(ws); });
   });
 
   // Heartbeat: ping all clients every 30 s, terminate any that don't pong back.
@@ -63,6 +67,11 @@ function handleClientMessage(ws, msg) {
   if (!subs) return;
 
   switch (msg.type) {
+    case 'authenticate': {
+      const auth = verifyToken(msg.token);
+      if (auth?.uid) wsUserIds.set(ws, auth.uid);
+      break;
+    }
     case 'subscribe_chunk':
       subs.add(chunkChannel(msg.worldId, msg.chunkKey));
       break;
@@ -89,7 +98,14 @@ function handleClientMessage(ws, msg) {
 // ---------------------------------------------------------------------------
 
 export function broadcastChunkUpdate(worldId, chunkKey, tiles) {
-  broadcast(chunkChannel(worldId, chunkKey), { type: 'chunk_update', worldId, chunkKey, tiles });
+  if (!_wss) return;
+  const channel = chunkChannel(worldId, chunkKey);
+  for (const [ws, subs] of subscriptions) {
+    if (!subs.has(channel) || ws.readyState !== 1) continue;
+    const userId   = wsUserIds.get(ws);
+    const filtered = userId ? filterTilesForPlayer(userId, worldId, tiles) : tiles;
+    ws.send(JSON.stringify({ type: 'chunk_update', worldId, chunkKey, tiles: filtered }));
+  }
 }
 
 export function broadcastWorldTick(worldId, info) {

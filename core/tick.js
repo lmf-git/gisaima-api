@@ -8,6 +8,7 @@ import { loadAllWorlds } from '../db/worlds.js';
 import { Ops } from '../lib/ops.js';
 import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
+import { updateWorldVisibility } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 
 import { mergeWorldMonsterGroups, monsterSpawnTick, spawnMonsters } from '../events/monsterSpawnTick.js';
@@ -68,6 +69,8 @@ async function processWorld(db, worldId, worldData, now) {
 
   const chunks = worldData.chunks || {};
   if (!Object.keys(chunks).length) return;
+
+  updateWorldVisibility(worldId, chunks);
 
   const ops = new Ops();
   const processedGroups = new Set();

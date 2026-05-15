@@ -26,6 +26,23 @@ const MAX_SPAWN_DISTANCE = 9; // Maximum distance from player activity to spawn
 const MIN_SPAWN_DISTANCE = 4; // Minimum distance from player activity to spawn
 const MAX_MONSTERS_PER_CHUNK = 10; // Maximum monster groups per chunk
 const STRUCTURE_SPAWN_CHANCE = 0.03; // 3% chance for a monster structure to spawn a monster group per tick
+const MIN_MOVEMENT_SPACE = 9; // Minimum accessible tiles within radius for a spawn to be worthwhile
+const MOVEMENT_SPACE_RADIUS = 3;
+
+function countAccessibleTiles(x, y, motion, terrainGenerator) {
+  const isWaterOnly = motion?.length === 1 && (motion.includes('water') || motion.includes('aquatic'));
+  const isGroundOnly = motion?.every(m => m !== 'water' && m !== 'aquatic' && m !== 'flying');
+  if (!isWaterOnly && !isGroundOnly) return Infinity;
+  let count = 0;
+  for (let dx = -MOVEMENT_SPACE_RADIUS; dx <= MOVEMENT_SPACE_RADIUS; dx++) {
+    for (let dy = -MOVEMENT_SPACE_RADIUS; dy <= MOVEMENT_SPACE_RADIUS; dy++) {
+      const water = isWaterTile(x + dx, y + dy, terrainGenerator);
+      if (isWaterOnly && water) count++;
+      else if (isGroundOnly && !water) count++;
+    }
+  }
+  return count;
+}
 
 /**
  * Spawn monsters near player activity
@@ -257,6 +274,12 @@ async function spawnMonstersAtStructures(worldId, monsterStructures, existingMon
 
     if (!monsterData) {
       console.error(`Invalid monster type: ${monsterType}`);
+      continue;
+    }
+
+    // Skip spawn if there isn't enough room for this movement type to operate
+    const spawnMotion = monsterData.motion || (isWater ? ['water'] : ['ground']);
+    if (countAccessibleTiles(structureData.x, structureData.y, spawnMotion, terrainGenerator) < MIN_MOVEMENT_SPACE) {
       continue;
     }
 
@@ -624,6 +647,12 @@ async function createNewMonsterGroup(
         return null;
       }
     }
+  }
+
+  // Skip spawn if there isn't enough accessible terrain for this movement type
+  const resolvedMotion = monsterData.motion || ['ground'];
+  if (countAccessibleTiles(location.x, location.y, resolvedMotion, terrainGenerator) < MIN_MOVEMENT_SPACE) {
+    return null;
   }
 
   // Generate a group ID

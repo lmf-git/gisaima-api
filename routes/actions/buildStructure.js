@@ -8,7 +8,7 @@ import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { Ops } from '../../lib/ops.js';
 
 export async function buildStructure({ uid, data, db }) {
-  const { worldId, groupId, tileX, tileY, structureType, structureName } = data;
+  const { worldId, groupId, tileX, tileY, structureType, structureName, subCell, subRow, subCol } = data;
 
   if (!worldId || !groupId || typeof tileX !== 'number' || typeof tileY !== 'number' || !structureType || !structureName) {
     throw err(400, 'Required parameters are missing or invalid.');
@@ -66,7 +66,8 @@ export async function buildStructure({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.structure`, {
     id: structId, name: structureName, type: structureType,
     status: 'building', buildProgress: 0,
-    owner: uid, ownerName, race: group.race || null, builder: groupId
+    owner: uid, ownerName, race: group.race || null, builder: groupId,
+    ...(subCell !== undefined ? { subCell, subRow, subCol } : {})
   });
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'building');
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`,  updatedItems);

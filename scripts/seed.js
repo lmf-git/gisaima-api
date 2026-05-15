@@ -22,7 +22,24 @@ const backupPath = process.argv[2]
   ? resolve(process.argv[2])
   : resolve(new URL('.', import.meta.url).pathname, '../../web/backup.json');
 
+async function waitForMongo(uri, retries = 20, delayMs = 1500) {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      const c = new MongoClient(uri);
+      await c.connect();
+      await c.db().command({ ping: 1 });
+      await c.close();
+      return;
+    } catch {
+      console.log(`Waiting for MongoDB… (${i}/${retries})`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error('MongoDB did not become ready in time');
+}
+
 async function seed() {
+  await waitForMongo(MONGO_URI);
   const client = new MongoClient(MONGO_URI);
   await client.connect();
   const db = client.db(); // Uses the DB name from the URI

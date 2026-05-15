@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node --preserve-symlinks index.js",
-    "dev": "node --preserve-symlinks --watch index.js"
+    "dev": "node --preserve-symlinks --watch index.js",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose down -v && docker compose up -d && node scripts/seed.js"
   },
   "dependencies": {
     "dotenv": "^17.4.1",
