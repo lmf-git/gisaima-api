@@ -9,6 +9,11 @@ import {
 } from "gisaima-shared/war/battles.js";
 import { STRUCTURES } from "gisaima-shared/definitions/STRUCTURES.js";
 import { merge } from "gisaima-shared/economy/items.js";
+import { getDb } from "../db/connection.js";
+import { settleBountiesForKill } from "../db/bounties.js";
+import { recordKill, recordDeath } from "../db/stats.js";
+import { applyKillEffect as applyMoralityKillEffect } from "../db/morality.js";
+import { addDeath } from "../db/lives.js";
 
 export function distributeLootToWinner({
   winner,
@@ -167,6 +172,31 @@ export function processSide({
     const casualties = unitsToRemove.length;
     updatedCasualties += casualties;
     ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.${sideKey}.casualties`, updatedCasualties);
+
+    // Auto-flee at threshold — per the group's `fleeAtLosses` rule-of-march.
+    // We only auto-trigger flee if the group survived this tick (newUnitCount > 0)
+    // and the cumulative loss ratio has crossed the threshold. Groups that
+    // are already in 'fleeing' state are skipped earlier in the loop. The
+    // flee resolution itself happens on the next battle tick (status:'fleeing'
+    // is cleaned up via the early-loop branch above).
+    if (newUnitCount > 0 && unitCount > 0) {
+      const fleeAt = Number(group.fleeAtLosses);
+      if (Number.isFinite(fleeAt) && fleeAt > 0 && fleeAt < 100) {
+        const lossRatio = 1 - (newUnitCount / unitCount);
+        if (lossRatio >= fleeAt / 100) {
+          ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'fleeing');
+          ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.fleeTickRequested`, Date.now());
+          ops.chat(worldId, {
+            text: `${group.name || 'A group'} has lost ${Math.round(lossRatio * 100)}% of its strength — its rule of march bids it flee!`,
+            type: 'event',
+            category: group.type === 'monster' ? 'monster' : 'player',
+            ...(group.type !== 'monster' && group.owner ? { userId: group.owner } : {}),
+            timestamp: Date.now(),
+            location: { x: tile?.x ?? null, y: tile?.y ?? null }
+          });
+        }
+      }
+    }
 
     // Check if the group will be destroyed
     if (newUnitCount <= 0) {
@@ -708,6 +738,58 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               y: battle.locationY
             }
           });
+
+          // Death side-effects: stats, lives chronicle, morality, bounty settle.
+          const dbConn = getDb();
+          const killerUid = player.killedBy?.id || null;
+          const location  = { x: battle.locationX, y: battle.locationY };
+
+          // Record death in stats + lives chronicle (async; do not block tick).
+          Promise.resolve()
+            .then(() => recordDeath(dbConn, worldId, playerId))
+            .then(() => addDeath(dbConn, worldId, playerId, {
+              cause: killerUid ? 'pvp' : 'battle',
+              by: killerUid,
+              at: new Date(),
+              location
+            }))
+            .catch((err) => console.error('[life-record]', err));
+
+          if (killerUid) {
+            // Killer credit: stats + morality + bounty payout.
+            Promise.resolve()
+              .then(() => recordKill(dbConn, worldId, killerUid))
+              .then(() => applyMoralityKillEffect(dbConn, worldId, killerUid, playerId, location))
+              .then((m) => {
+                if (m) {
+                  ops.chat(worldId, {
+                    text: `The realm marks ${m.polarity === 'good' ? '+' : '−'}${m.magnitude} ${m.polarity} on the killer of ${player.displayName || 'a player'}.`,
+                    type: 'event',
+                    category: 'player',
+                    timestamp: Date.now(),
+                    location
+                  });
+                }
+              })
+              .catch((err) => console.error('[morality-kill]', err));
+
+            settleBountiesForKill(dbConn, ops, worldId, playerId, killerUid)
+              .then(({ total, sink }) => {
+                if (total > 0) {
+                  const where = sink
+                    ? `${sink.kind} at (${sink.tileKey})`
+                    : 'no resolved home — gold is lost';
+                  ops.chat(worldId, {
+                    text: `A bounty of ${total.toLocaleString()} gold was settled on ${player.displayName || 'a fallen player'}. Paid to the killer's ${where}.`,
+                    type: 'event',
+                    category: 'player',
+                    timestamp: Date.now(),
+                    location
+                  });
+                }
+              })
+              .catch((err) => console.error('[bounty-settle]', err));
+          }
         }
       });
     }

@@ -23,6 +23,13 @@ import { processCrafting }         from '../events/craftingTick.js';
 import { processMonsterStrategies }from '../events/monsterStrategyTick.js';
 import { processRecruitment }      from '../events/recruitmentTick.js';
 
+// New per-domain tick hooks
+import { tickClosure as tickVoteClosure } from '../db/politics.js';
+import { tick as tickBanks }              from '../db/banks.js';
+import { progressTrails }                 from '../db/trails.js';
+import { tick as tickCleanup }            from '../db/cleanup.js';
+import { processStructureProduction }     from '../events/structureProductionTick.js';
+
 const TICK_INTERVAL_MS = 60_000;
 const MAX_CHAT_HISTORY = 500;
 
@@ -58,11 +65,17 @@ async function processWorld(db, worldId, worldData, now) {
   const worldInfo = worldData?.info || {};
   const terrainGenerator = new TerrainGenerator(worldInfo.seed, 10_000);
 
+  // Advance tick counter alongside lastTick so in-world time-of-day works.
+  const prevTickCount = Number(worldInfo.tickCount) || 0;
   await db.collection('worlds').updateOne(
     { _id: worldId },
-    { $set: { 'info.lastTick': now } },
+    {
+      $set: { 'info.lastTick': now },
+      $inc: { 'info.tickCount': 1 }
+    },
     { upsert: true }
   );
+  worldInfo.tickCount = prevTickCount + 1;
 
   const removed = await trimChatMessages(db, worldId, MAX_CHAT_HISTORY);
   if (removed > 0) console.log(`[tick] removed ${removed} old chat messages in ${worldId}`);
@@ -70,7 +83,22 @@ async function processWorld(db, worldId, worldData, now) {
   const chunks = worldData.chunks || {};
   if (!Object.keys(chunks).length) return;
 
-  updateWorldVisibility(worldId, chunks);
+  // Pull morality scores so the beacon visibility extension can downgrade
+  // privacy for low-morality players (bad acts → wider visibility).
+  const moralityByUid = {};
+  try {
+    const playerDocs = await db.collection('players')
+      .find({ [`worlds.${worldId}.morality`]: { $exists: true } },
+            { projection: { _id: 1, [`worlds.${worldId}.morality.score`]: 1 } })
+      .toArray();
+    for (const p of playerDocs) {
+      const s = p.worlds?.[worldId]?.morality?.score;
+      if (typeof s === 'number') moralityByUid[p._id] = s;
+    }
+  } catch (err) {
+    console.error(`[tick] morality fetch ${worldId}:`, err);
+  }
+  updateWorldVisibility(worldId, chunks, moralityByUid);
 
   const ops = new Ops();
   const processedGroups = new Set();
@@ -152,6 +180,53 @@ async function processWorld(db, worldId, worldData, now) {
   if (Math.random() < 0.666) await processMonsterStrategies(worldId, chunks, terrainGenerator, db);
   if (Math.random() < 0.2)   await spawnMonsters(worldId, chunks, terrainGenerator, db);
   if (Math.random() < 0.15)  await mergeWorldMonsterGroups(worldId, chunks, terrainGenerator, db);
+
+  // --- Structure passive production + tax skim ---
+  try {
+    const prodOps = new Ops();
+    const r = await processStructureProduction(db, worldId, chunks, prodOps);
+    await prodOps.flush(db);
+    if (r.producedStructures > 0 || r.totalTaxed > 0) {
+      console.log(`[tick] ${worldId} production: ${r.producedStructures} structures · ${r.totalTaxed} gold to coffers`);
+    }
+  } catch (err) {
+    console.error(`[tick] structureProduction ${worldId}:`, err);
+  }
+
+  // --- Per-domain tick hooks (politics, banks, trails) ---
+  try {
+    const closed = await tickVoteClosure(db, worldId, new Date(now));
+    if (closed > 0) console.log(`[tick] ${worldId} closed ${closed} expired votes`);
+  } catch (err) {
+    console.error(`[tick] vote closure ${worldId}:`, err);
+  }
+  try {
+    const bankResult = await tickBanks(db, worldId);
+    if (bankResult.defaults > 0) console.log(`[tick] ${worldId} ${bankResult.defaults} loan defaults`);
+  } catch (err) {
+    console.error(`[tick] banks ${worldId}:`, err);
+  }
+  try {
+    const trailsCompleted = await progressTrails(db, worldId);
+    if (trailsCompleted > 0) console.log(`[tick] ${worldId} ${trailsCompleted} treasure trail(s) completed`);
+  } catch (err) {
+    console.error(`[tick] trails ${worldId}:`, err);
+  }
+
+  // Inactivity sweep — must run *after* battleTick has resolved so any
+  // soon-to-be-purged player's pending battles are already on tiles. The
+  // cleanup module skips anything currently locked in a battle, so live
+  // state is never broken mid-resolution.
+  try {
+    const cleanupOps = new Ops();
+    const r = await tickCleanup(db, worldId, chunks, cleanupOps, worldInfo);
+    await cleanupOps.flush(db);
+    if (r.degraded || r.ruined || r.removedGroups || r.removedStructures || r.removedPlayers) {
+      console.log(`[tick] ${worldId} cleanup: degraded=${r.degraded} ruined=${r.ruined} groups=${r.removedGroups} structs=${r.removedStructures} players=${r.removedPlayers}`);
+    }
+  } catch (err) {
+    console.error(`[tick] cleanup ${worldId}:`, err);
+  }
 
   const updatedWorld = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   broadcastWorldTick(worldId, updatedWorld?.info || worldInfo);

@@ -3,11 +3,26 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
 import { Ops } from '../../lib/ops.js';
+import { isInsideExclusion } from '../../db/spawns.js';
+
+// Cache one terrain generator per world for the lifetime of the process.
+const _terrainByWorld = new Map();
+async function _terrainFor(db, worldId) {
+  if (_terrainByWorld.has(worldId)) return _terrainByWorld.get(worldId);
+  const w = await db.collection('worlds').findOne({ _id: worldId }, { projection: { 'info.seed': 1 } });
+  const gen = new TerrainGenerator(w?.info?.seed ?? 1, 4_000);
+  _terrainByWorld.set(worldId, gen);
+  return gen;
+}
 
 export async function mobiliseUnits({ uid, data, db }) {
-  const { worldId, tileX, tileY, units = [], includePlayer, name, race } = data;
+  const {
+    worldId, tileX, tileY, units = [], includePlayer, name, race,
+    captain, fleeAtLosses, joinBattlesInProgress
+  } = data;
 
   if (!worldId || typeof tileX !== 'number' || typeof tileY !== 'number') {
     throw err(400, 'Required parameters are missing or invalid.');
@@ -28,6 +43,29 @@ export async function mobiliseUnits({ uid, data, db }) {
     throw err(409, 'Player is already mobilising or moving');
   }
 
+  // Block mobilisation on water unless the new group's payload includes a boat —
+  // the actual boat check happens below where motion caps are accumulated. We
+  // do a cheap pre-check here for the common case (mobilising plain ground
+  // units from a flooded / shore tile after a wash).
+  try {
+    const terrain = await _terrainFor(db, worldId);
+    const tileData = terrain.getTerrainData(tileX, tileY);
+    if (tileData?.water) {
+      // Only allow mobilising on water if the units include something with a
+      // boat capacity. We can't know that until we walk the unit list, so set a
+      // flag and re-check after the motion accumulator.
+      data._tileIsWater = true;
+    }
+
+    // Block mobilising inside another player's spawn exclusion zone.
+    const zone = await isInsideExclusion(db, worldId, tileX, tileY, uid);
+    if (zone) {
+      throw err(403, `Cannot mobilise inside the exclusion zone of ${zone.name || zone.kind} spawn`);
+    }
+  } catch (e) {
+    if (e.status) throw e;
+  }
+
   if (units.length > 0) {
     const ownedUnits = new Set();
     for (const g of Object.values(tile.groups || {})) {
@@ -43,7 +81,23 @@ export async function mobiliseUnits({ uid, data, db }) {
 
   const now        = Date.now();
   const newGroupId = `group_${now}_${Math.floor(Math.random() * 10000)}`;
-  const newGroup   = { id: newGroupId, name: name.trim(), owner: uid, status: 'mobilizing', mobilizedAt: now, x: tileX, y: tileY, race: race || null, units: {} };
+  const newGroup   = {
+    id: newGroupId,
+    name: name.trim(),
+    owner: uid,
+    status: 'mobilizing',
+    mobilizedAt: now,
+    x: tileX,
+    y: tileY,
+    race: race || null,
+    units: {},
+    // Rule of march — captured at mobilise time, consumed by battleTick when
+    // determining whether to flee and by joinBattle resolution. Validated to
+    // safe defaults so a malformed client payload can't lock a group.
+    captain: ['self', 'eldest'].includes(captain) ? captain : 'self',
+    fleeAtLosses: Math.max(0, Math.min(100, Number(fleeAtLosses) || 40)),
+    joinBattlesInProgress: joinBattlesInProgress !== false
+  };
   const motionCaps = new Set();
   let hasBoat = false, boatCapacity = 0, nonBoatCount = 0;
 
@@ -79,6 +133,13 @@ export async function mobiliseUnits({ uid, data, db }) {
   } else {
     const m = Array.from(motionCaps);
     newGroup.motion = m.length ? (m.includes('water') && !m.includes('ground') && !m.includes('flying') ? ['water'] : m) : ['ground'];
+  }
+
+  // Final water gate — if the mobilisation tile is water, the group must have
+  // a boat (or be water-motion). Without that, a player would form a banner
+  // standing in the sea.
+  if (data._tileIsWater && !hasBoat && !newGroup.motion.includes('water')) {
+    throw err(409, 'Cannot mobilise ground units on water — bring a boat with capacity for everyone.');
   }
 
   updatedGroups[newGroupId] = newGroup;

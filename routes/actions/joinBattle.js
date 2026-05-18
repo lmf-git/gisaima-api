@@ -26,6 +26,13 @@ export async function joinBattle({ uid, data, db }) {
   if (group.owner !== uid)  throw err(403, 'You can only join battles with your own groups');
   if (group.status === 'fighting') throw err(409, 'This group is already in battle');
 
+  // Respect the group's rule-of-march "join battles in progress" toggle.
+  // The Mobilise UI defaults this to true; setting it false means the group
+  // refuses to be drawn into someone else's battle.
+  if (group.joinBattlesInProgress === false) {
+    throw err(409, "This group's rule of march forbids joining battles in progress.");
+  }
+
   const now      = Date.now();
   const sideName = (side === 1 ? battle.side1?.name : battle.side2?.name) || `Side ${side}`;
   const groupName = group.name || `Group ${groupId.slice(-4)}`;

@@ -4,6 +4,8 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { addDistance } from '../db/stats.js';
+import { deliver as deliverCaravan } from '../db/caravans.js';
 
 export async function processMovement(worldId, ops, group, chunkKey, tileKey, groupId, now, _db, worldInfo = null) {
   if (group.status === 'cancelling') {
@@ -44,6 +46,36 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
   const nextIndex    = currentIndex + 1;
 
   if (nextIndex >= group.movementPath.length) {
+    const startPoint = group.movementPath[0];
+    const endPoint   = group.movementPath[group.movementPath.length - 1];
+
+    // Caravan delivery — drop items into the recipient's sink, remove the
+    // caravan group, and emit a chat event describing the outcome.
+    if (group.type === 'caravan' && group.delivery && _db) {
+      deliverCaravan(_db, ops, worldId, group, chunkKey, tileKey)
+        .then((result) => {
+          if (result?.intercepted) {
+            ops.chat(worldId, {
+              text: `A caravan from ${group.owner?.slice(0, 6) || 'a trader'} was ambushed at (${endPoint.x},${endPoint.y}). Its load is lost to the realm.`,
+              type: 'event',
+              category: 'player',
+              timestamp: now,
+              location: { x: endPoint.x, y: endPoint.y }
+            });
+          } else if (result) {
+            ops.chat(worldId, {
+              text: `A caravan delivered its load to ${group.delivery.toUid.slice(0, 6)} at (${endPoint.x},${endPoint.y}).`,
+              type: 'event',
+              category: 'player',
+              timestamp: now,
+              location: { x: endPoint.x, y: endPoint.y }
+            });
+          }
+        })
+        .catch((err) => console.error('[caravan-deliver]', err));
+      return true;
+    }
+
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,       'idle');
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.movementPath`, null);
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.pathIndex`,    null);
@@ -51,8 +83,6 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.moveSpeed`,    null);
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.nextMoveTime`, null);
 
-    const startPoint = group.movementPath[0];
-    const endPoint   = group.movementPath[group.movementPath.length - 1];
     ops.chat(worldId, {
       text: `${group.name || 'Unnamed force'} completed their journey from (${startPoint.x},${startPoint.y}) to (${endPoint.x},${endPoint.y})`,
       type: 'event',
@@ -98,6 +128,18 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
 
     ops.chunk(worldId, nextChunkKey, `${nextTileKey}.groups.${groupId}`, updatedGroup);
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}`, null);
+
+    // Track distance travelled + last-known location for player-owned groups.
+    // Drives wealth/distance rankings, treasure-trail proximity solves,
+    // and the per-character chronicle.
+    if (_db && group.type !== 'monster' && group.owner) {
+      addDistance(_db, worldId, group.owner, 1).catch(() => {});
+      _db.collection('players').updateOne(
+        { _id: group.owner },
+        { $set: { [`worlds.${worldId}.lastLocation`]: { x: nextPoint.x, y: nextPoint.y } } },
+        { upsert: true }
+      ).catch(() => {});
+    }
 
     const isSignificant = nextIndex % 3 === 0 || nextIndex === group.movementPath.length - 1;
     if (isSignificant) {

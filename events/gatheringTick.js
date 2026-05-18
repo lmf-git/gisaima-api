@@ -4,6 +4,7 @@
 
 import { merge } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
+import { splitAndCreditStructure } from '../db/productionTax.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
 
 function groupCapacity(group) {
@@ -50,7 +51,13 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   }
 
   const gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
-  const mergedItems   = group.items ? merge(group.items, gatheredItems) : gatheredItems;
+
+  // Production tax — if a structure on this tile has tax rates set, its
+  // steward takes a slice of the output before the group sees it.
+  const { kept: keptItems } =
+    splitAndCreditStructure(ops, worldId, chunkKey, tileKey, tile, gatheredItems);
+
+  const mergedItems = group.items ? merge(group.items, keptItems) : keptItems;
   const capacity      = groupCapacity(group);
   const itemCount     = groupItemCount(mergedItems);
   const gatherUntilFull = group.gatherUntilFull === true;
