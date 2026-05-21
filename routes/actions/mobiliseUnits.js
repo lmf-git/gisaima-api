@@ -21,7 +21,7 @@ async function _terrainFor(db, worldId) {
 export async function mobiliseUnits({ uid, data, db }) {
   const {
     worldId, tileX, tileY, units = [], includePlayer, name, race,
-    captain, fleeAtLosses, joinBattlesInProgress
+    fleeAtLosses, joinBattlesInProgress
   } = data;
 
   if (!worldId || typeof tileX !== 'number' || typeof tileY !== 'number') {
@@ -94,7 +94,6 @@ export async function mobiliseUnits({ uid, data, db }) {
     // Rule of march — captured at mobilise time, consumed by battleTick when
     // determining whether to flee and by joinBattle resolution. Validated to
     // safe defaults so a malformed client payload can't lock a group.
-    captain: ['self', 'eldest'].includes(captain) ? captain : 'self',
     fleeAtLosses: Math.max(0, Math.min(100, Number(fleeAtLosses) || 40)),
     joinBattlesInProgress: joinBattlesInProgress !== false
   };
