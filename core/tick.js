@@ -8,7 +8,7 @@ import { loadAllWorlds } from '../db/worlds.js';
 import { Ops } from '../lib/ops.js';
 import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
-import { updateWorldVisibility } from '../lib/visibility.js';
+import { updateWorldVisibility, refreshIfStale } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 
 import { mergeWorldMonsterGroups, monsterSpawnTick, spawnMonsters } from '../events/monsterSpawnTick.js';
@@ -169,6 +169,11 @@ async function processWorld(db, worldId, worldData, now) {
   }
 
   await ops.flush(db);
+
+  // Rebuild visibility from post-flush state so broadcast filtering reflects
+  // any movements/spawns that happened during this tick rather than the
+  // start-of-tick positions.
+  await refreshIfStale(db, worldId, 0);
 
   // Broadcast updated chunks to WebSocket clients
   await broadcastChangedChunks(db, worldId, ops);
