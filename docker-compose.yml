@@ -1,3 +1,5 @@
+name: gisaima
+
 services:
   mongodb:
     image: mongo:7
