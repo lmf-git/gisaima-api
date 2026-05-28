@@ -257,6 +257,11 @@ export async function moveMonsterTowardsTarget(
     }
   }
 
+  // targetLocation may have been nulled out above when no land was found near a water target
+  if (!targetLocation) {
+    return { action: 'idle', reason: 'no_valid_target_location' };
+  }
+
   // If target is more than 1 tile away, move only 1 tile in that direction
   if (targetDistance > 1.5) {
     return moveOneStepTowardsTarget(worldId, monsterGroup, location, targetLocation, targetType, ops, now, chunks, terrainGenerator);

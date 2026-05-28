@@ -21,7 +21,6 @@ export function processRecruitment(worldId, ops, chunkKey, tileKey, tile, now) {
     const owner          = recruitment.owner;
     const race           = recruitment.race || unitDefinition.race || structure.race || 'neutral';
     const type           = recruitment.type || unitDefinition.type;
-    const power          = unitDefinition.power || recruitment.power || 1;
     const icon           = unitDefinition.icon || recruitment.icon || 'sword';
     const newUnitId      = `unit_${now}_${recruitmentId}`;
 
@@ -36,7 +35,6 @@ export function processRecruitment(worldId, ops, chunkKey, tileKey, tile, now) {
       type,
       race,
       quantity,
-      power,
       icon,
       owner,
       createdAt: now,
