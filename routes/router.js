@@ -6,6 +6,8 @@ import { postChat }                                     from './chat.js';
 import { getReports, postReportRead }                   from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
 import { getBounties, postBounty, postBountyClaim }     from './bounties.js';
+import { getFriends, getFriendRequests, postFriendRequest,
+         postAcceptRequest, postDeclineRequest, postRemoveFriend } from './friends.js';
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getPolitics, postVote }                        from './politics.js';
@@ -23,6 +25,7 @@ import * as itemRoutes from './items.js';
 import attack                from './actions/attack.js';
 import equipItem             from './actions/equipItem.js';
 import buildStructure        from './actions/buildStructure.js';
+import addBuilding           from './actions/addBuilding.js';
 import cancelCrafting        from './actions/cancelCrafting.js';
 import cancelGathering       from './actions/cancelGathering.js';
 import cancelMovement        from './actions/cancelMovement.js';
@@ -43,6 +46,7 @@ import startGathering        from './actions/startGathering.js';
 import startStructureUpgrade from './actions/startStructureUpgrade.js';
 import unloadGroup           from './actions/unloadGroup.js';
 import setStructureTaxes     from './actions/setStructureTaxes.js';
+import setStructureAccess    from './actions/setStructureAccess.js';
 
 export async function route(db, req, body) {
   const { method } = req;
@@ -118,6 +122,22 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && !s4)              return postBounty(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && s4)               return postBountyClaim(db, auth, s2, s4);
 
+  // Friends
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && !s4)               return getFriends(db, auth, s2);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') return getFriendRequests(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') {
+    const [, , , , , s5, s6] = p.split('/');
+    if (!s5) return postFriendRequest(db, auth, s2, body);
+    if (s6 === 'accept')  return postAcceptRequest(db, auth, s2, s5);
+    if (s6 === 'decline') return postDeclineRequest(db, auth, s2, s5);
+    throw apiError(400, 'friend request action required');
+  }
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'friends' && s4) {
+    const [, , , , , s5] = p.split('/');
+    if (s5 === 'remove') return postRemoveFriend(db, auth, s2, s4);
+    throw apiError(400, 'friend action required');
+  }
+
   // Trade
   if (method === 'POST' && s1 === 'worlds' && s3 === 'trade' && s4 === 'offers') {
     const [, , , , , s5, s6] = p.split('/');
@@ -182,6 +202,7 @@ export async function route(db, req, body) {
     if (s2 === 'attack')                return attack(ctx);
     if (s2 === 'equipItem')            return equipItem(ctx);
     if (s2 === 'buildStructure')        return buildStructure(ctx);
+    if (s2 === 'addBuilding')           return addBuilding(ctx);
     if (s2 === 'cancelCrafting')        return cancelCrafting(ctx);
     if (s2 === 'cancelGathering')       return cancelGathering(ctx);
     if (s2 === 'cancelMovement')        return cancelMovement(ctx);
@@ -202,6 +223,7 @@ export async function route(db, req, body) {
     if (s2 === 'startStructureUpgrade') return startStructureUpgrade(ctx);
     if (s2 === 'unloadGroup')           return unloadGroup(ctx);
     if (s2 === 'setStructureTaxes')     return setStructureTaxes(ctx);
+    if (s2 === 'setStructureAccess')    return setStructureAccess(ctx);
 
     throw apiError(404, `unknown action: ${s2}`);
   }

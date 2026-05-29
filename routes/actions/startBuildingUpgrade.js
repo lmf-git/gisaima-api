@@ -2,6 +2,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { BUILDINGS } from 'gisaima-shared';
 import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { Ops } from '../../lib/ops.js';
+import { canUse } from '../../structures/access.js';
 
 export async function startBuildingUpgrade({ uid, data, db }) {
   const { worldId, x, y, buildingId } = data;
@@ -20,9 +21,8 @@ export async function startBuildingUpgrade({ uid, data, db }) {
   const building = structure.buildings[buildingId];
   if (building.upgradeInProgress) throw err(409, 'Building is already being upgraded');
 
-  const isOwner = structure.owner === uid;
-  const isSpawn = structure.type === 'spawn';
-  if (!isOwner && !isSpawn) throw err(403, 'You do not have permission to upgrade this building');
+  const allowed = await canUse({ db, worldId, structure, uid, action: 'build' });
+  if (!allowed) throw err(403, 'You do not have permission to upgrade this building');
 
   const currentLevel = building.level || 1;
   if (currentLevel >= 5) throw err(409, 'Building is already at maximum level');

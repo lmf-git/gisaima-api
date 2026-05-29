@@ -4,6 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
+import { canUse } from '../../structures/access.js';
 
 export async function demobiliseUnits({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId = 'default', storageDestination = 'shared' } = data;
@@ -26,6 +27,13 @@ export async function demobiliseUnits({ uid, data, db }) {
   if (group.status === 'demobilising') throw err(409, 'Group is already demobilising');
   if (!structure)                      throw err(409, 'No structure found at this location');
   if (!structure.id)                   throw err(409, 'Structure has no ID');
+
+  // Depositing into the structure's shared pool requires deposit permission;
+  // personal storage goes into the player's own bank and is always allowed.
+  if (storage === 'shared') {
+    const allowed = await canUse({ db, worldId, structure, uid, action: 'deposit' });
+    if (!allowed) throw err(403, "You do not have permission to deposit into this structure's shared storage");
+  }
 
   const hasPlayerUnit = Object.values(group.units || {}).some(u => u.type === 'player');
   const now   = Date.now();

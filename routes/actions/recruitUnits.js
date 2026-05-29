@@ -1,6 +1,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Units } from 'gisaima-shared/units/units.js';
 import { Ops } from '../../lib/ops.js';
+import { canUse } from '../../structures/access.js';
 
 export async function recruitUnits({ uid, data, db }) {
   const { structureId, x, y, worldId, unitType, quantity, cost } = data;
@@ -28,8 +29,8 @@ export async function recruitUnits({ uid, data, db }) {
   }
 
   const isOwned = structure.owner === uid;
-  const isSpawn = structure.type === 'spawn';
-  if (!isOwned && !isSpawn) throw err(403, 'You do not own this structure');
+  const allowed = await canUse({ db, worldId, structure, uid, action: 'recruit' });
+  if (!allowed) throw err(403, 'You do not have permission to recruit at this structure');
 
   const maxQueue   = structure.capacity || 10;
   const queueItems = Object.values(structure.recruitmentQueue || {}).filter(i => i && typeof i === 'object');

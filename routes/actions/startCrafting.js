@@ -1,5 +1,6 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
+import { canUse } from '../../structures/access.js';
 
 export async function startCrafting({ uid, data, db }) {
   const { worldId, x, y, recipeId } = data;
@@ -16,6 +17,9 @@ export async function startCrafting({ uid, data, db }) {
   const chunkDoc  = await db.collection('chunks').findOne({ worldId, chunkKey });
   const structure = chunkDoc?.tiles?.[tileKey]?.structure;
   if (!structure) throw err(404, 'Structure not found');
+
+  const allowed = await canUse({ db, worldId, structure, uid, action: 'recruit' });
+  if (!allowed) throw err(403, 'You do not have permission to craft at this structure');
 
   const playerDoc = await db.collection('players').findOne({ _id: uid });
   if (!playerDoc?.worlds?.[worldId]) throw err(404, 'Player data not found');
