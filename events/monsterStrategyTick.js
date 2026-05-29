@@ -35,6 +35,10 @@ import {
 import { calculateGroupPower } from "gisaima-shared/war/battles.js";
 import { STRUCTURES } from "gisaima-shared/definitions/STRUCTURES.js";
 
+// Verbose per-group strategy logging is gated behind MONSTER_DEBUG to keep
+// tick output readable; a single summary line is always printed instead.
+const dlog = process.env.MONSTER_DEBUG ? console.log.bind(console) : () => {};
+
 // Constants and configuration
 const STRATEGY_CHANCE = 0.4; // Chance for a monster group to take strategic action
 const MIN_UNITS_TO_BUILD = 5; // Minimum units needed to consider building
@@ -74,7 +78,7 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
   };
 
   try {
-    console.log(`Processing monster strategies for world ${worldId}`);
+    dlog(`Processing monster strategies for world ${worldId}`);
 
     // Ensure chunks exists before scanning but don't try to fetch it
     if (!chunks) {
@@ -85,7 +89,7 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
     // Preparation: scan the world for key locations (player spawns, resources, etc)
     const worldScan = scanWorldMap(chunks);
 
-    console.log(`World scan complete. Found: ${worldScan.playerSpawns.length} player spawns, ` +
+    dlog(`World scan complete. Found: ${worldScan.playerSpawns.length} player spawns, ` +
                 `${worldScan.monsterStructures.length} monster structures, ` +
                 `${worldScan.resourceHotspots.length} resource hotspots`);
 
@@ -266,8 +270,13 @@ export async function processMonsterStrategies(worldId, chunks, terrainGenerator
     }
 
     // Apply all updates in a single batch
-    console.log(`Applying updates for monster strategies`);
+    dlog(`Applying updates for monster strategies`);
     await ops.flush(db);
+
+    console.log(`[monsterStrategy] ${worldId}: ${results.totalProcessed} processed · ` +
+                `moves=${results.movesInitiated} gather=${results.gatheringStarted} ` +
+                `built=${results.structuresBuildStarted} merged=${results.groupsMerged} ` +
+                `battles=${results.battlesJoined} errors=${results.errors}`);
 
     return results;
 
@@ -319,7 +328,7 @@ export async function executeMonsterStrategy(
       const interruptionCheck = shouldInterruptMovement(monsterGroup, tileData, worldScan, location);
 
       if (interruptionCheck.shouldInterrupt) {
-        console.log(`Monster group ${groupId} interrupting movement to ${interruptionCheck.reason} at (${location.x}, ${location.y})`);
+        dlog(`Monster group ${groupId} interrupting movement to ${interruptionCheck.reason} at (${location.x}, ${location.y})`);
 
         // Clear movement data to allow new action
         ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
@@ -369,7 +378,7 @@ export async function executeMonsterStrategy(
 
     // If this monster group has a targetStructure (from structured mobilization)
     if (monsterGroup.targetStructure) {
-      console.log(`Monster group ${groupId} has target structure at (${monsterGroup.targetStructure.x}, ${monsterGroup.targetStructure.y})`);
+      dlog(`Monster group ${groupId} has target structure at (${monsterGroup.targetStructure.x}, ${monsterGroup.targetStructure.y})`);
 
       // Check if target structure is on a water tile and monster can't traverse water
       let isTargetWater = false;
@@ -397,7 +406,7 @@ export async function executeMonsterStrategy(
 
       if (isTargetWater) {
         // Reset target structure if it's on water and we can't reach it
-        console.log(`Monster group ${groupId} cannot reach target structure - it's on a water tile`);
+        dlog(`Monster group ${groupId} cannot reach target structure - it's on a water tile`);
         ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.targetStructure`, null);
 
         // Move to a different target instead
@@ -431,7 +440,7 @@ export async function executeMonsterStrategy(
             );
           }
         } else {
-          console.log(`Target tile ${targetTileKey} in chunk ${targetChunkKey} not found in chunks data`);
+          dlog(`Target tile ${targetTileKey} in chunk ${targetChunkKey} not found in chunks data`);
         }
       } else {
         // Still moving toward target - prioritize movement
@@ -490,7 +499,7 @@ export async function executeMonsterStrategy(
     // If aggressive/feral monster is on same tile as a player structure, always attack it
     if (onSameTileAsPlayerStructure &&
         (personalityId === 'AGGRESSIVE' || personalityId === 'FERAL')) {
-      console.log(`${personalityId} monster group ${monsterGroup.id} on same tile as player structure - attacking!`);
+      dlog(`${personalityId} monster group ${monsterGroup.id} on same tile as player structure - attacking!`);
 
       return await initiateAttackOnStructure(
         db, worldId, monsterGroup, tileData.structure, location, ops, now
@@ -545,7 +554,7 @@ export async function executeMonsterStrategy(
 
         // If too weak to attack, prioritize merging
         if (!canAttackAnyTarget) {
-          console.log(`${personalityId} monster group ${monsterGroup.id} is too weak to attack - prioritizing merging!`);
+          dlog(`${personalityId} monster group ${monsterGroup.id} is too weak to attack - prioritizing merging!`);
           mergeWeight = 2.0; // Very high priority to merge when too weak
         }
       }
@@ -799,13 +808,13 @@ export async function executeMonsterStrategy(
 
       // If still no action is available, return a safe default
       if (!selectedAction) {
-        console.log(`No action available for monster group ${monsterGroup.id}. Using idle default.`);
+        dlog(`No action available for monster group ${monsterGroup.id}. Using idle default.`);
         return { action: 'idle', reason: 'fallback_no_actions' };
       }
     }
 
     // Log the action chosen
-    console.log(`Monster group ${monsterGroup.id} with ${personalityId} personality chose action: ${selectedAction.name}`);
+    dlog(`Monster group ${monsterGroup.id} with ${personalityId} personality chose action: ${selectedAction.name}`);
 
     // Execute the selected action with try-catch to handle errors
     try {

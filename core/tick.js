@@ -28,10 +28,37 @@ import { tickClosure as tickVoteClosure } from '../db/politics.js';
 import { tick as tickBanks }              from '../db/banks.js';
 import { progressTrails }                 from '../db/trails.js';
 import { tick as tickCleanup }            from '../db/cleanup.js';
+import { tick as tickMonsterPopulation }  from '../db/monsterCleanup.js';
 import { processStructureProduction }     from '../events/structureProductionTick.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_CHAT_HISTORY = 500;
+
+// Walk the in-memory chunks once to count monster population. Growth in these
+// numbers over a long-running world is the prime suspect for tick slowdown,
+// so we log them alongside the per-phase timing breakdown.
+function censusMonsters(chunks) {
+  let groups = 0, units = 0, structures = 0, totalGroups = 0, totalTiles = 0;
+  for (const chunkKey in chunks) {
+    const chunk = chunks[chunkKey];
+    for (const tileKey in chunk) {
+      const tile = chunk[tileKey];
+      totalTiles++;
+      if (tile.structure?.monster === true) structures++;
+      if (tile.groups) {
+        for (const groupId in tile.groups) {
+          const g = tile.groups[groupId];
+          totalGroups++;
+          if (g?.type === 'monster') {
+            groups++;
+            units += g.units ? Object.keys(g.units).length : 0;
+          }
+        }
+      }
+    }
+  }
+  return { groups, units, structures, totalGroups, totalTiles };
+}
 
 export function startTick() {
   console.log('Game tick scheduler started');
@@ -103,6 +130,11 @@ async function processWorld(db, worldId, worldData, now) {
   const ops = new Ops();
   const processedGroups = new Set();
 
+  // Per-phase timing: mark(label) records elapsed since the previous mark.
+  const timings = {};
+  let _t = Date.now();
+  const mark = (label) => { timings[label] = (timings[label] || 0) + (Date.now() - _t); _t = Date.now(); };
+
   // --- Pass 1: battles (must resolve before movement / mobilisation) ---
   for (const chunkKey in chunks) {
     const chunk = chunks[chunkKey];
@@ -123,6 +155,8 @@ async function processWorld(db, worldId, worldData, now) {
       }
     }
   }
+
+  mark('battles');
 
   // --- Pass 2: group activities ---
   for (const chunkKey in chunks) {
@@ -168,23 +202,33 @@ async function processWorld(db, worldId, worldData, now) {
     }
   }
 
+  mark('groupActivities');
+
   await ops.flush(db);
+  mark('flush');
 
   // Rebuild visibility from post-flush state so broadcast filtering reflects
   // any movements/spawns that happened during this tick rather than the
   // start-of-tick positions.
   await refreshIfStale(db, worldId, 0);
+  mark('visibility');
 
   // Broadcast updated chunks to WebSocket clients
   await broadcastChangedChunks(db, worldId, ops);
+  mark('broadcast');
 
   // --- Async processors (use worldData already loaded) ---
   await upgradeTickProcessor(worldId, worldData, db);
+  mark('upgrades');
   await processCrafting(worldId, worldData, db);
+  mark('crafting');
 
   if (Math.random() < 0.666) await processMonsterStrategies(worldId, chunks, terrainGenerator, db);
+  mark('monsterStrategies');
   if (Math.random() < 0.2)   await spawnMonsters(worldId, chunks, terrainGenerator, db);
+  mark('spawnMonsters');
   if (Math.random() < 0.15)  await mergeWorldMonsterGroups(worldId, chunks, terrainGenerator, db);
+  mark('mergeMonsters');
 
   // --- Structure passive production + tax skim ---
   try {
@@ -197,6 +241,7 @@ async function processWorld(db, worldId, worldData, now) {
   } catch (err) {
     console.error(`[tick] structureProduction ${worldId}:`, err);
   }
+  mark('structureProduction');
 
   // --- Per-domain tick hooks (politics, banks, trails) ---
   try {
@@ -217,6 +262,7 @@ async function processWorld(db, worldId, worldData, now) {
   } catch (err) {
     console.error(`[tick] trails ${worldId}:`, err);
   }
+  mark('domainHooks');
 
   // Inactivity sweep — must run *after* battleTick has resolved so any
   // soon-to-be-purged player's pending battles are already on tiles. The
@@ -232,9 +278,42 @@ async function processWorld(db, worldId, worldData, now) {
   } catch (err) {
     console.error(`[tick] cleanup ${worldId}:`, err);
   }
+  mark('cleanup');
+
+  // --- Monster population control (cap by active players + aging) ---
+  // Reads fresh chunk state and runs last so it never removes a monster that
+  // entered a battle or began demobilising during this tick. Gated to amortise
+  // the extra chunk read — population drifts slowly, no need to check it every
+  // tick.
+  if (Math.random() < 0.25) {
+    try {
+      const mcOps = new Ops();
+      const r = await tickMonsterPopulation(db, worldId, mcOps, worldInfo);
+      await mcOps.flush(db);
+      if (r.agedGroups || r.cappedGroups || r.agedStructs || r.cappedStructs) {
+        console.log(`[tick] ${worldId} monsterCap (players=${r.activePlayers} caps g=${r.groupCap}/s=${r.structCap}; ` +
+                    `had g=${r.monsterGroups}/s=${r.monsterStructs}) removed groups aged=${r.agedGroups} ` +
+                    `capped=${r.cappedGroups} · structs aged=${r.agedStructs} capped=${r.cappedStructs}`);
+      }
+    } catch (err) {
+      console.error(`[tick] monsterCap ${worldId}:`, err);
+    }
+  }
+  mark('monsterCap');
 
   const updatedWorld = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   broadcastWorldTick(worldId, updatedWorld?.info || worldInfo);
+
+  // --- Per-phase timing breakdown + monster census ---
+  const total = Object.values(timings).reduce((a, b) => a + b, 0);
+  const breakdown = Object.entries(timings)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, ms]) => `${label}=${ms}ms`)
+    .join(' ');
+  const m = censusMonsters(chunks);
+  console.log(`[tick] ${worldId} timing ${total}ms · ${breakdown}`);
+  console.log(`[tick] ${worldId} census · monsterGroups=${m.groups} monsterUnits=${m.units} ` +
+              `monsterStructs=${m.structures} | totalGroups=${m.totalGroups} tiles=${m.totalTiles}`);
 }
 
 async function broadcastChangedChunks(db, worldId, ops) {
