@@ -184,7 +184,9 @@ export async function route(db, req, body) {
   // Lives
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'lives')                        return lives.getMine(db, s2, auth.uid);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'heirs')                        return lives.getHeirs(db, s2, auth.uid);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'characters')                   return lives.getActive(db, s2, auth.uid);
   if (method === 'GET'  && s1 === 'ethnicities')                                      return lives.getEthnicities();
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'control')    return lives.postControl(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'respawn')    return lives.postRespawn(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'reproduce')  return lives.postReproduce(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && !s4)                 return lives.postBirth(db, auth, s2, body);

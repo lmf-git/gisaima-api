@@ -149,7 +149,7 @@ async function processWorld(db, worldId, worldData, now) {
 
         switch (group.status) {
           case 'demobilising':
-            if (processDemobilization(worldId, ops, group, chunkKey, tileKey, groupId, tile, now)) {
+            if (await processDemobilization(worldId, ops, group, chunkKey, tileKey, groupId, tile, now, db)) {
               processedGroups.add(key);
             }
             break;

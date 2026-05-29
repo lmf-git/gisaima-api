@@ -7,6 +7,9 @@ import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
 import { Ops } from '../../lib/ops.js';
 import { isInsideExclusion } from '../../db/spawns.js';
+import { getPlayerWorldData } from '../../db/players.js';
+import { patchLife } from '../../db/lives.js';
+import { invalidate as invalidateVisibility } from '../../lib/visibility.js';
 
 // Cache one terrain generator per world for the lifetime of the process.
 const _terrainByWorld = new Map();
@@ -35,12 +38,18 @@ export async function mobiliseUnits({ uid, data, db }) {
   const chunkDoc = await db.collection('chunks').findOne({ worldId, chunkKey });
   const tile     = chunkDoc?.tiles?.[tileKey] || {};
 
-  if (!tile.players?.[uid] && !_playerInGroups(tile.groups, uid)) {
-    throw err(409, 'Player not found on this tile');
+  // Which character is being mobilised — the controlled one unless the client
+  // names a specific lifeId. Entities are keyed by lifeId.
+  const playerData = await getPlayerWorldData(db, uid, worldId);
+  const lifeId = String(data.lifeId || playerData?.controlledLifeId || '');
+  if (!lifeId) throw err(409, 'No active character to mobilise');
+
+  if (!tile.players?.[lifeId] && !_playerInGroups(tile.groups, lifeId)) {
+    throw err(409, 'Character not found on this tile');
   }
 
-  if (_playerInActiveGroup(tile.groups, uid)) {
-    throw err(409, 'Player is already mobilising or moving');
+  if (_playerInActiveGroup(tile.groups, lifeId)) {
+    throw err(409, 'Character is already mobilising or moving');
   }
 
   // Block mobilisation on water unless the new group's payload includes a boat —
@@ -119,9 +128,9 @@ export async function mobiliseUnits({ uid, data, db }) {
     }
   }
 
-  if (includePlayer && tile.players?.[uid]) {
-    const player = tile.players[uid];
-    newGroup.units[uid] = { ...player, type: 'player' };
+  if (includePlayer && tile.players?.[lifeId]) {
+    const player = tile.players[lifeId];
+    newGroup.units[lifeId] = { ...player, id: lifeId, uid, type: 'player' };
     motionCaps.add('ground');
   }
 
@@ -155,30 +164,39 @@ export async function mobiliseUnits({ uid, data, db }) {
   ops.player(uid, worldId, 'achievements.mobilised', true);
 
   if (includePlayer) {
-    ops.chunk(worldId, chunkKey, `${tileKey}.players.${uid}`, null);
+    ops.chunk(worldId, chunkKey, `${tileKey}.players.${lifeId}`, null);
     ops.player(uid, worldId, 'lastLocation', { x: tileX, y: tileY });
     ops.player(uid, worldId, 'inGroup',      newGroupId);
   }
 
   await ops.flush(db);
+
+  // Per-character placement: this life is now travelling inside the group.
+  if (includePlayer) {
+    await patchLife(db, lifeId, { inGroup: newGroupId, lastLocation: { x: tileX, y: tileY } });
+  }
+
+  // Sight sources changed (player entity → group) — rebuild on next fetch.
+  invalidateVisibility(worldId);
+
   return { success: true, groupId: newGroupId };
 }
 
-function _playerInGroups(groups, uid) {
+function _playerInGroups(groups, lifeId) {
   if (!groups) return false;
   for (const g of Object.values(groups)) {
     if (!g.units) continue;
-    if (Object.values(g.units).some(u => u.type === 'player' && u.id === uid)) return true;
+    if (Object.values(g.units).some(u => u.type === 'player' && String(u.id) === String(lifeId))) return true;
   }
   return false;
 }
 
-function _playerInActiveGroup(groups, uid) {
+function _playerInActiveGroup(groups, lifeId) {
   if (!groups) return false;
   for (const g of Object.values(groups)) {
     if (g.status !== 'mobilizing' && g.status !== 'moving') continue;
     if (!g.units) continue;
-    if (Object.values(g.units).some(u => u.type === 'player' && u.id === uid)) return true;
+    if (Object.values(g.units).some(u => u.type === 'player' && String(u.id) === String(lifeId))) return true;
   }
   return false;
 }

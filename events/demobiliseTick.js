@@ -3,8 +3,9 @@
  */
 
 import { merge } from 'gisaima-shared/economy/items.js';
+import { patchLife } from '../db/lives.js';
 
-export function processDemobilization(worldId, ops, group, chunkKey, tileKey, groupId, tile, now) {
+export async function processDemobilization(worldId, ops, group, chunkKey, tileKey, groupId, tile, now, db = null) {
   if (group.status !== 'demobilising') return false;
 
   const groupName      = group.name || 'Unnamed group';
@@ -59,6 +60,9 @@ export function processDemobilization(worldId, ops, group, chunkKey, tileKey, gr
 
       for (const pu of playerUnits) {
         if (pu.id) {
+          // The player unit id is the character's lifeId; its owning user is on
+          // pu.uid (fall back to the uid-owned group for safety).
+          const ownerUid = pu.uid || group.owner;
           let loc;
           if (group.demobilizationData?.exactLocation) {
             loc = group.demobilizationData.exactLocation;
@@ -70,10 +74,15 @@ export function processDemobilization(worldId, ops, group, chunkKey, tileKey, gr
           ops.chunk(worldId, pChunkKey, `${pTileKey}.players.${pu.id}`, {
             displayName: pu.displayName || pu.name || `Player ${pu.id}`,
             id: pu.id,
+            uid: ownerUid,
             race: pu.race || 'human'
           });
-          ops.player(pu.id, worldId, 'lastLocation', { x: loc.x, y: loc.y, timestamp: now });
-          ops.player(pu.id, worldId, 'inGroup', null);
+          if (ownerUid) {
+            ops.player(ownerUid, worldId, 'lastLocation', { x: loc.x, y: loc.y, timestamp: now });
+            ops.player(ownerUid, worldId, 'inGroup', null);
+          }
+          // Per-character placement back on the map.
+          if (db) await patchLife(db, pu.id, { inGroup: null, alive: true, lastLocation: { x: loc.x, y: loc.y } });
         }
       }
 

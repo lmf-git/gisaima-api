@@ -6,6 +6,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { addDistance } from '../db/stats.js';
 import { deliver as deliverCaravan } from '../db/caravans.js';
+import { patchLife } from '../db/lives.js';
 
 export async function processMovement(worldId, ops, group, chunkKey, tileKey, groupId, now, _db, worldInfo = null) {
   if (group.status === 'cancelling') {
@@ -157,7 +158,10 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
       const units = Array.isArray(group.units) ? group.units : Object.values(group.units);
       for (const unit of units) {
         if (unit.type === 'player' && unit.id) {
-          ops.player(unit.id, worldId, 'lastLocation', { x: nextPoint.x, y: nextPoint.y, timestamp: now });
+          // unit.id is the character's lifeId; the player doc is keyed by uid.
+          const ownerUid = unit.uid || group.owner;
+          if (ownerUid) ops.player(ownerUid, worldId, 'lastLocation', { x: nextPoint.x, y: nextPoint.y, timestamp: now });
+          if (_db) await patchLife(_db, unit.id, { lastLocation: { x: nextPoint.x, y: nextPoint.y } });
         }
       }
     }

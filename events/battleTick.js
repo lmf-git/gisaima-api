@@ -13,7 +13,16 @@ import { getDb } from "../db/connection.js";
 import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
 import { applyKillEffect as applyMoralityKillEffect } from "../db/morality.js";
-import { addDeath } from "../db/lives.js";
+import { killCharacter } from "../db/lives.js";
+import { ObjectId } from "mongodb";
+
+// Resolve a character's lifeId to its owning uid (null if not a real life).
+async function _lifeUid(db, lifeId) {
+  try {
+    const l = await db.collection('lives').findOne({ _id: new ObjectId(lifeId) }, { projection: { uid: 1 } });
+    return l?.uid || null;
+  } catch { return null; }
+}
 
 export function distributeLootToWinner({
   winner,
@@ -217,7 +226,8 @@ export function processSide({
       // Handle players in group
       for (const unitId in units) {
         if (units[unitId].type === 'player' && units[unitId].id) {
-          ops.player(units[unitId].id, worldId, 'inGroup', null);
+          const ownerUid = units[unitId].uid || group.owner;
+          if (ownerUid) ops.player(ownerUid, worldId, 'inGroup', null);
         }
       }
 
@@ -678,21 +688,19 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
 
       // For each killed player, mark them as not alive and clear their group
       playersKilled.forEach(player => {
-        const playerId = player.playerId;
+        const playerId = player.playerId;   // dead character's lifeId
+        const victimDocUid = player.uid;     // owning user (player doc key)
         if (playerId) {
-          // Set alive status to false
-          ops.player(playerId, worldId, 'alive', false);
+          // alive/control/deaths are reconciled by killCharacter (below). Here we
+          // only stamp a death message on the owning player doc.
+          if (victimDocUid) {
+            ops.player(victimDocUid, worldId, 'lastMessage', {
+              text: "Died in battle",
+              timestamp: Date.now()
+            });
+          }
 
-          // Clear their group reference
-          ops.player(playerId, worldId, 'inGroup', null);
-
-          // Add a clear death message to the player's record
-          ops.player(playerId, worldId, 'lastMessage', {
-            text: "Died in battle",
-            timestamp: Date.now()
-          });
-
-          console.log(`Player ${playerId} (${player.displayName}) killed in battle and marked as dead`);
+          console.log(`Character ${playerId} (${player.displayName}) of ${victimDocUid} killed in battle`);
 
           // Add a chat message about player death - enhanced for PvP
           let deathMessage = `${player.displayName || "A player"} has fallen in battle at (${battle.locationX}, ${battle.locationY})`;
@@ -740,55 +748,55 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           });
 
           // Death side-effects: stats, lives chronicle, morality, bounty settle.
+          // playerId is the dead character's lifeId; player.uid owns it. The
+          // killer is identified by a lifeId too, so resolve it to a uid.
           const dbConn = getDb();
-          const killerUid = player.killedBy?.id || null;
+          const victimUid = player.uid || null;
+          const killerLifeId = player.killedBy?.id || null;
           const location  = { x: battle.locationX, y: battle.locationY };
 
           // Record death in stats + lives chronicle (async; do not block tick).
           Promise.resolve()
-            .then(() => recordDeath(dbConn, worldId, playerId))
-            .then(() => addDeath(dbConn, worldId, playerId, {
-              cause: killerUid ? 'pvp' : 'battle',
-              by: killerUid,
+            .then(() => victimUid && recordDeath(dbConn, worldId, victimUid))
+            .then(() => victimUid && killCharacter(dbConn, worldId, victimUid, playerId, {
+              cause: killerLifeId ? 'pvp' : 'battle',
+              by: killerLifeId,
               at: new Date(),
               location
             }))
             .catch((err) => console.error('[life-record]', err));
 
-          if (killerUid) {
-            // Killer credit: stats + morality + bounty payout.
-            Promise.resolve()
-              .then(() => recordKill(dbConn, worldId, killerUid))
-              .then(() => applyMoralityKillEffect(dbConn, worldId, killerUid, playerId, location))
-              .then((m) => {
-                if (m) {
-                  ops.chat(worldId, {
-                    text: `The realm marks ${m.polarity === 'good' ? '+' : '−'}${m.magnitude} ${m.polarity} on the killer of ${player.displayName || 'a player'}.`,
-                    type: 'event',
-                    category: 'player',
-                    timestamp: Date.now(),
-                    location
-                  });
-                }
-              })
-              .catch((err) => console.error('[morality-kill]', err));
-
-            settleBountiesForKill(dbConn, ops, worldId, playerId, killerUid)
-              .then(({ total, sink }) => {
-                if (total > 0) {
-                  const where = sink
-                    ? `${sink.kind} at (${sink.tileKey})`
-                    : 'no resolved home — gold is lost';
-                  ops.chat(worldId, {
-                    text: `A bounty of ${total.toLocaleString()} gold was settled on ${player.displayName || 'a fallen player'}. Paid to the killer's ${where}.`,
-                    type: 'event',
-                    category: 'player',
-                    timestamp: Date.now(),
-                    location
-                  });
-                }
-              })
-              .catch((err) => console.error('[bounty-settle]', err));
+          // Killer credit — resolve the killer's character → owning uid, then
+          // award stats/morality/bounty to that user.
+          if (killerLifeId) {
+            (async () => {
+              const killerUid = await _lifeUid(dbConn, killerLifeId);
+              if (!killerUid) return;
+              await recordKill(dbConn, worldId, killerUid).catch(() => {});
+              const m = await applyMoralityKillEffect(dbConn, worldId, killerUid, victimUid, location).catch(() => null);
+              if (m) {
+                ops.chat(worldId, {
+                  text: `The realm marks ${m.polarity === 'good' ? '+' : '−'}${m.magnitude} ${m.polarity} on the killer of ${player.displayName || 'a player'}.`,
+                  type: 'event',
+                  category: 'player',
+                  timestamp: Date.now(),
+                  location
+                });
+              }
+              const r = await settleBountiesForKill(dbConn, ops, worldId, victimUid, killerUid).catch(() => null);
+              if (r && r.total > 0) {
+                const where = r.sink
+                  ? `${r.sink.kind} at (${r.sink.tileKey})`
+                  : 'no resolved home — gold is lost';
+                ops.chat(worldId, {
+                  text: `A bounty of ${r.total.toLocaleString()} gold was settled on ${player.displayName || 'a fallen player'}. Paid to the killer's ${where}.`,
+                  type: 'event',
+                  category: 'player',
+                  timestamp: Date.now(),
+                  location
+                });
+              }
+            })().catch((err) => console.error('[kill-credit]', err));
           }
         }
       });
@@ -848,8 +856,11 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           if (!group?.units) continue;
           for (const [unitId, unit] of Object.entries(group.units)) {
             if (unit.type === 'player' && unit.id) {
-              ops.playerInc(unit.id, worldId, 'xp', xpReward);
-              ops.playerInc(unit.id, worldId, 'kills', enemyCasualties);
+              const ownerUid = unit.uid || group.owner;
+              if (ownerUid) {
+                ops.playerInc(ownerUid, worldId, 'xp', xpReward);
+                ops.playerInc(ownerUid, worldId, 'kills', enemyCasualties);
+              }
             } else if (unit.type !== 'player') {
               const currentXP = unit.xp || 0;
               const newXP = currentXP + xpReward;
@@ -874,8 +885,11 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         if (!group?.units) continue;
         for (const unit of Object.values(group.units)) {
           if (unit.type === 'player' && unit.id) {
-            ops.player(unit.id, worldId, 'achievements.first_victory', true);
-            ops.player(unit.id, worldId, 'achievements.first_victory_date', battleEndTime);
+            const ownerUid = unit.uid || group.owner;
+            if (ownerUid) {
+              ops.player(ownerUid, worldId, 'achievements.first_victory', true);
+              ops.player(ownerUid, worldId, 'achievements.first_victory_date', battleEndTime);
+            }
           }
         }
       }
@@ -1100,12 +1114,20 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                   let killedPlayersCount = 0;
                   const killedPlayerNames = [];
 
-                  Object.entries(tile.players).forEach(([playerId, playerData]) => {
-                    ops.player(playerId, worldId, 'alive', false);
-                    ops.player(playerId, worldId, 'inGroup', null);
-                    ops.player(playerId, worldId, 'lastMessage', { text: "Died in structure destruction", timestamp: now });
-                    ops.player(playerId, worldId, 'lastLocation', null);
-                    ops.chunk(worldId, chunkKey, `${tileKey}.players.${playerId}`, null);
+                  Object.entries(tile.players).forEach(([entityLifeId, playerData]) => {
+                    // entityLifeId is the character; playerData.uid is the user.
+                    const ownerUid = playerData.uid;
+                    if (ownerUid) {
+                      ops.player(ownerUid, worldId, 'lastMessage', { text: "Died in structure destruction", timestamp: now });
+                    }
+                    // Remove the character entity from the tile and mark that
+                    // specific life dead (control/alive reconciled in killCharacter).
+                    ops.chunk(worldId, chunkKey, `${tileKey}.players.${entityLifeId}`, null);
+                    if (ownerUid) {
+                      killCharacter(getDb(), worldId, ownerUid, entityLifeId, {
+                        cause: 'structure', at: new Date(now), location: { x: parseInt(tileKey.split(',')[0]), y: parseInt(tileKey.split(',')[1]) }
+                      }).catch((err) => console.error('[life-record]', err));
+                    }
                     killedPlayersCount++;
                     if (playerData.displayName) killedPlayerNames.push(playerData.displayName);
                   });

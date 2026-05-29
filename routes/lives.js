@@ -50,6 +50,24 @@ export async function getHeirs(db, worldId, uid) {
   return { items: await lives.listHeirs(db, worldId, uid) };
 }
 
+// Living, on-map characters the player can switch the camera between.
+export async function getActive(db, worldId, uid) {
+  if (!uid) return { items: [] };
+  const items = (await lives.listActive(db, worldId, uid)).filter(l => l.alive);
+  return { items };
+}
+
+// Switch which character the map follows / actions default to.
+export async function postControl(db, auth, worldId, body) {
+  if (!body?.lifeId) throw apiError(400, 'lifeId required');
+  try {
+    const life = await lives.setControlled(db, worldId, auth.uid, body.lifeId);
+    return { success: true, lifeId: String(life._id), name: life.name };
+  } catch (e) {
+    throw apiError(400, e.message);
+  }
+}
+
 export function getEthnicities() {
   return { items: lives.ETHNICITIES };
 }

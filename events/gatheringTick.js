@@ -18,6 +18,22 @@ function groupItemCount(items) {
   return Object.values(items).reduce((s, q) => s + q, 0);
 }
 
+// Trim an items map so its total quantity does not exceed `max`. Items earlier
+// in iteration order are kept preferentially; the remainder is dropped (the
+// group physically can't carry them).
+function trimToCount(items, max) {
+  if (max === Infinity) return items;
+  if (max <= 0) return {};
+  let total = 0;
+  const out = {};
+  for (const [code, qty] of Object.entries(items)) {
+    if (total >= max) break;
+    const take = Math.min(qty, max - total);
+    if (take > 0) { out[code] = take; total += take; }
+  }
+  return out;
+}
+
 export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId, tile, now, terrainGenerator = null) {
   if (group.status === 'cancellingGather') return false;
   if (group.status !== 'gathering')        return false;
@@ -57,8 +73,13 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   const { kept: keptItems } =
     splitAndCreditStructure(ops, worldId, chunkKey, tileKey, tile, gatheredItems);
 
-  const mergedItems = group.items ? merge(group.items, keptItems) : keptItems;
   const capacity      = groupCapacity(group);
+  // Only carry what fits — never overshoot capacity by a whole batch. Existing
+  // items are preserved; the freshly gathered batch is trimmed to the space
+  // that remains.
+  const remaining     = capacity > 0 ? Math.max(0, capacity - groupItemCount(group.items)) : Infinity;
+  const cappedKept    = trimToCount(keptItems, remaining);
+  const mergedItems   = group.items ? merge(group.items, cappedKept) : cappedKept;
   const itemCount     = groupItemCount(mergedItems);
   const gatherUntilFull = group.gatherUntilFull === true;
   const atCapacity    = capacity > 0 && itemCount >= capacity;

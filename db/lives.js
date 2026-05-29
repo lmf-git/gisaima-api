@@ -11,8 +11,21 @@
  * location for others to scavenge.
  */
 import { ObjectId } from 'mongodb';
+import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 
 const SPAWN_STORE_CAP = 200;
+
+// Place a character entity directly on a tile (used when a child is born onto
+// the map). Entities are keyed by lifeId and carry uid.
+async function _placeOnMap(db, worldId, uid, lifeId, name, race, location) {
+  const chunkKey = getChunkKey(location.x, location.y);
+  const tileKey  = `${location.x},${location.y}`;
+  await db.collection('chunks').updateOne(
+    { worldId, chunkKey },
+    { $set: { [`tiles.${tileKey}.players.${String(lifeId)}`]: { id: String(lifeId), uid, displayName: name, race: race || 'human' } } },
+    { upsert: true }
+  );
+}
 
 export async function listFor(db, worldId, uid) {
   return db.collection('lives')
@@ -25,27 +38,60 @@ export async function currentLife(db, worldId, uid) {
   return db.collection('lives').findOne({ worldId, uid, died: null });
 }
 
-export async function birth(db, { worldId, uid, name, parentLifeId = null }) {
+export async function birth(db, { worldId, uid, name, race = 'human', parentLifeId = null, makeControlled = true }) {
   const insert = {
-    worldId, uid, name,
+    worldId, uid, name, race,
     born: new Date(),
     died: null,
     deeds: 0,
+    // Per-life gameplay state — each character now carries its own placement so
+    // a single user can control several lives concurrently.
+    active: true,
+    alive: false,            // becomes true once spawned onto the map
+    lastLocation: null,
+    inGroup: null,
     parentLifeId: parentLifeId ? new ObjectId(parentLifeId) : null
   };
   const r = await db.collection('lives').insertOne(insert);
+  const set = {
+    [`worlds.${worldId}.displayName`]: name,
+    [`worlds.${worldId}.currentLifeId`]: r.insertedId
+  };
+  if (makeControlled) set[`worlds.${worldId}.controlledLifeId`] = r.insertedId;
+  await db.collection('players').updateOne({ _id: uid }, { $set: set }, { upsert: true });
+  return { ...insert, _id: r.insertedId };
+}
+
+// All living, controllable characters a user has in a world.
+export async function listActive(db, worldId, uid) {
+  return db.collection('lives')
+    .find({ worldId, uid, active: true, died: null })
+    .sort({ born: 1 })
+    .toArray();
+}
+
+// Switch which character the player is driving. Validates ownership + that the
+// target life is active and alive.
+export async function setControlled(db, worldId, uid, lifeId) {
+  const _id = new ObjectId(lifeId);
+  const life = await db.collection('lives').findOne({ _id, worldId, uid });
+  if (!life)        throw new Error('character not found');
+  if (life.died)    throw new Error('that character has died');
+  if (!life.active) throw new Error('that character is not active');
+  if (!life.alive)  throw new Error('that character is not yet on the map');
   await db.collection('players').updateOne(
     { _id: uid },
-    {
-      $set: {
-        [`worlds.${worldId}.displayName`]: name,
-        [`worlds.${worldId}.alive`]: true,
-        [`worlds.${worldId}.currentLifeId`]: r.insertedId
-      }
-    },
-    { upsert: true }
+    { $set: { [`worlds.${worldId}.controlledLifeId`]: _id, [`worlds.${worldId}.displayName`]: life.name } }
   );
-  return { ...insert, _id: r.insertedId };
+  return life;
+}
+
+// Ensure a legacy player (joined before the lives binding existed) has at least
+// one bound, active life and a controlledLifeId. Idempotent.
+export async function ensureBoundLife(db, worldId, uid, { name, race = 'human' } = {}) {
+  const existing = await db.collection('lives').findOne({ worldId, uid, active: true, died: null });
+  if (existing) return existing;
+  return birth(db, { worldId, uid, name: name || `Wanderer ${String(uid).slice(0, 4)}`, race, makeControlled: true });
 }
 
 export async function addDeath(db, worldId, uid, { cause = 'unknown', by = null, at = new Date(), inventory = null, location = null } = {}) {
@@ -149,6 +195,91 @@ export async function respawn(db, worldId, uid, name, spawnPoint, heirLifeId = n
   return birth(db, { worldId, uid, name: name || `Heir of ${uid.slice(0, 6)}` });
 }
 
+// Patch arbitrary per-character gameplay fields (inGroup, lastLocation, alive…).
+export async function patchLife(db, lifeId, fields) {
+  await db.collection('lives').updateOne({ _id: new ObjectId(lifeId) }, { $set: fields });
+}
+
+export async function getLife(db, worldId, uid, lifeId) {
+  return db.collection('lives').findOne({ _id: new ObjectId(lifeId), worldId, uid });
+}
+
+// Mark a character as placed on the map at `location`. Mirrors the controlled
+// character's state onto the player doc so existing reads keep working.
+export async function markSpawned(db, worldId, uid, lifeId, location, { makeControlled = true } = {}) {
+  const _id = new ObjectId(lifeId);
+  await db.collection('lives').updateOne(
+    { _id, worldId, uid },
+    { $set: { alive: true, active: true, lastLocation: location, inGroup: null } }
+  );
+  const life = await db.collection('lives').findOne({ _id });
+  const set = {
+    [`worlds.${worldId}.alive`]: true,
+    [`worlds.${worldId}.lastLocation`]: location
+  };
+  if (makeControlled) {
+    set[`worlds.${worldId}.controlledLifeId`] = _id;
+    set[`worlds.${worldId}.displayName`] = life?.name;
+  }
+  await db.collection('players').updateOne({ _id: uid }, { $set: set }, { upsert: true });
+  return life;
+}
+
+/**
+ * Kill a specific character. Marks that life dead, and on the player doc:
+ * decrements nothing but increments deaths, recomputes `alive` (true while ANY
+ * character still lives), and — if the dead one was being controlled — hands
+ * control to another living character. Assets handled as in addDeath.
+ */
+export async function killCharacter(db, worldId, uid, lifeId, { cause = 'unknown', by = null, at = new Date(), location = null, inventory = null } = {}) {
+  const _id = new ObjectId(lifeId);
+  await db.collection('lives').updateOne(
+    { _id, worldId, uid },
+    { $set: { died: at, cause, by, deathLocation: location, active: false, alive: false, inGroup: null } }
+  );
+
+  const remaining = await db.collection('lives')
+    .find({ worldId, uid, active: true, died: null, alive: true })
+    .sort({ born: 1 })
+    .toArray();
+  const anyAlive = remaining.length > 0;
+
+  const player = await db.collection('players').findOne(
+    { _id: uid }, { projection: { [`worlds.${worldId}.controlledLifeId`]: 1 } }
+  );
+  const controlled = player?.worlds?.[worldId]?.controlledLifeId;
+
+  const set = { [`worlds.${worldId}.alive`]: anyAlive };
+  if (String(controlled) === String(_id)) {
+    set[`worlds.${worldId}.controlledLifeId`] = anyAlive ? remaining[0]._id : null;
+    if (anyAlive) set[`worlds.${worldId}.displayName`] = remaining[0].name;
+  }
+  await db.collection('players').updateOne(
+    { _id: uid },
+    { $set: set, $inc: { [`worlds.${worldId}.deaths`]: 1 } },
+    { upsert: true }
+  );
+
+  if (inventory && location) {
+    const stored = {};
+    const dropped = {};
+    let used = 0;
+    for (const [k, q] of Object.entries(inventory)) {
+      const fit = Math.min(q, Math.max(0, SPAWN_STORE_CAP - used));
+      if (fit > 0) { stored[k] = fit; used += fit; }
+      if (q - fit > 0) dropped[k] = q - fit;
+    }
+    if (Object.keys(stored).length) {
+      await db.collection('players').updateOne({ _id: uid }, { $set: { [`worlds.${worldId}.spawnStore`]: stored } });
+    }
+    if (Object.keys(dropped).length) {
+      await db.collection('item_drops').insertOne({ worldId, x: location.x, y: location.y, items: dropped, droppedAt: at, from: uid });
+    }
+  }
+
+  return { ok: true, anyAlive };
+}
+
 export async function deathFeed(db, worldId, limit = 50) {
   return db.collection('lives')
     .find({ worldId, died: { $ne: null } })
@@ -222,11 +353,14 @@ export async function reproduce(db, worldId, parentLifeIds = []) {
 
   const ethnicity = _pickEthnicity(parents);
   const trait     = _pickTrait(parents);
-  const ownerUid  = parents[0].uid;
 
   const count = _howManyChildren();
   const heirs = [];
   for (let i = 0; i < count; i++) {
+    // Each child independently goes to one of the (up to two) parents 50:50.
+    const ownerUid = parents.length > 1
+      ? (Math.random() < 0.5 ? parents[0].uid : parents[1].uid)
+      : parents[0].uid;
     const sex = SEX_OPTIONS[Math.floor(Math.random() * SEX_OPTIONS.length)];
     const baseName = parents[0].name?.split(' ')?.[0] || 'Heir';
     const insert = {
@@ -239,10 +373,28 @@ export async function reproduce(db, worldId, parentLifeIds = []) {
       sex,
       ethnicity,
       trait,
+      // A child is a real, controllable character. If the owning parent is on
+      // the map, the child is born there (alive + switchable immediately);
+      // otherwise it waits to be spawned.
+      active: true,
+      alive: false,
+      lastLocation: null,
+      inGroup: null,
       parentLifeIds: parents.map((p) => p._id),
       isHeir: true
     };
+    const owningParent = parents.find((p) => p.uid === ownerUid) || parents[0];
+    const birthLoc = owningParent?.lastLocation && typeof owningParent.lastLocation.x === 'number'
+      ? { x: owningParent.lastLocation.x, y: owningParent.lastLocation.y }
+      : null;
+    if (birthLoc) {
+      insert.alive = true;
+      insert.lastLocation = birthLoc;
+    }
     const r = await db.collection('lives').insertOne(insert);
+    if (birthLoc) {
+      await _placeOnMap(db, worldId, ownerUid, r.insertedId, insert.name, owningParent?.race, birthLoc);
+    }
     heirs.push({ ...insert, _id: r.insertedId });
   }
   return { ok: true, heirs };
