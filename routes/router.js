@@ -108,6 +108,11 @@ export async function route(db, req, body) {
   const auth = getAuth(req);
   if (!auth) throw apiError(401, 'not authenticated');
 
+  // A signed token outlives the account it names (e.g. after a DB wipe). Reject
+  // tokens whose user no longer exists so stale sessions can't keep playing.
+  const account = await db.collection('users').findOne({ _id: auth.uid }, { projection: { _id: 1 } });
+  if (!account) throw apiError(401, 'account no longer exists');
+
   // Bump per-world lastSeen so the cleanup tick can tell active players
   // from inactive ones. Fire-and-forget — never blocks the request.
   if (s1 === 'worlds' && s2) touchLastSeen(db, auth.uid, s2).catch(() => {});
