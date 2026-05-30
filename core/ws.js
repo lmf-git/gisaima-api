@@ -116,6 +116,15 @@ export function broadcastChatMessage(worldId, message) {
   broadcast(chatChannel(worldId), { type: 'chat_message', worldId, message });
 }
 
+/** Send a message to all authenticated sockets belonging to a specific user. */
+export function broadcastToUser(userId, payload) {
+  if (!_wss) return;
+  const data = JSON.stringify(payload);
+  for (const [ws, uid] of wsUserIds) {
+    if (uid === userId && ws.readyState === 1 /* OPEN */) ws.send(data);
+  }
+}
+
 function broadcast(channel, payload) {
   if (!_wss) return;
   const data = JSON.stringify(payload);

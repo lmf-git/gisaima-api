@@ -10,6 +10,7 @@ import { isInsideExclusion } from '../../db/spawns.js';
 import { getPlayerWorldData } from '../../db/players.js';
 import { patchLife } from '../../db/lives.js';
 import { invalidate as invalidateVisibility } from '../../lib/visibility.js';
+import { broadcastToUser } from '../../core/ws.js';
 
 // Cache one terrain generator per world for the lifetime of the process.
 const _terrainByWorld = new Map();
@@ -41,6 +42,7 @@ export async function mobiliseUnits({ uid, data, db }) {
   // Which character is being mobilised — the controlled one unless the client
   // names a specific lifeId. Entities are keyed by lifeId.
   const playerData = await getPlayerWorldData(db, uid, worldId);
+  const alreadyMobilised = playerData?.achievements?.mobilised === true;
   const lifeId = String(data.lifeId || playerData?.controlledLifeId || '');
   if (!lifeId) throw err(409, 'No active character to mobilise');
 
@@ -170,6 +172,10 @@ export async function mobiliseUnits({ uid, data, db }) {
   }
 
   await ops.flush(db);
+
+  if (!alreadyMobilised) {
+    broadcastToUser(uid, { type: 'achievement_unlocked', achievementId: 'mobilised', worldId });
+  }
 
   // Per-character placement: this life is now travelling inside the group.
   if (includePlayer) {
