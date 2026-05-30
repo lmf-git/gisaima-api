@@ -7,6 +7,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { addDistance } from '../db/stats.js';
 import { deliver as deliverCaravan } from '../db/caravans.js';
 import { patchLife } from '../db/lives.js';
+import { invalidate as invalidateVisibility } from '../lib/visibility.js';
 
 export async function processMovement(worldId, ops, group, chunkKey, tileKey, groupId, now, _db, worldInfo = null) {
   if (group.status === 'cancelling') {
@@ -140,6 +141,12 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
         { $set: { [`worlds.${worldId}.lastLocation`]: { x: nextPoint.x, y: nextPoint.y } } },
         { upsert: true }
       ).catch(() => {});
+
+      // A player-owned group is a sight source — its move changes what the owner
+      // can see. Force the visibility cache to rebuild so chunk fetches before the
+      // next tick reflect the new position (mirrors the spawn invalidation),
+      // otherwise tiles newly in range stay hidden until something else changes.
+      invalidateVisibility(worldId);
     }
 
     const isSignificant = nextIndex % 3 === 0 || nextIndex === group.movementPath.length - 1;

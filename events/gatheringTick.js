@@ -142,8 +142,8 @@ function generateGatheredItems(group, biome = 'plains', terrainRarity = 'common'
     items[c] = (items[c] || 0) + Math.ceil(qty * multiplier);
   }
 
-  addItem('WOODEN_STICKS', Math.floor(Math.random() * 5) + 1);
-  addItem('STONE_PIECES',  Math.floor(Math.random() * 3) + 1);
+  addItem('WOOD', Math.floor(Math.random() * 5) + 1);
+  addItem('STONE',  Math.floor(Math.random() * 3) + 1);
 
   const biomeItems = getBiomeItems(biome);
   const itemCount  = Math.ceil(baseItems * multiplier);
@@ -178,7 +178,7 @@ function getSpecialItemsByBiome(biome, rarity) {
     result.push({ id: 'MEDICINAL_HERBS', quantity: Math.floor(Math.random() * 2) + 1 });
   else if (bl.includes('mountain') || bl.includes('peak') || bl.includes('hill')) {
     result.push({ id: 'MOUNTAIN_CRYSTAL', quantity: 1 });
-    if (Math.random() < 0.4) result.push({ id: 'IRON_ORE', quantity: Math.floor(Math.random() * 2) + 1 });
+    if (Math.random() < 0.4) result.push({ id: 'METAL_ORE', quantity: Math.floor(Math.random() * 2) + 1 });
   } else if (bl.includes('desert') || bl.includes('sand') || bl.includes('dune')) {
     result.push({ id: 'SAND_CRYSTAL', quantity: 1 });
     if (Math.random() < 0.3) result.push({ id: 'CACTUS_FRUIT', quantity: Math.floor(Math.random() * 3) + 1 });

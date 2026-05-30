@@ -240,10 +240,11 @@ function getRequiredResourcesForStructure(structureType) {
     }));
   }
   
-  // Default simple requirements if structure type not found
+  // Default simple requirements if structure type not found. Names uppercase to
+  // item codes (WOOD/STONE) for resource matching.
   return [
-    { name: 'Wooden Sticks', quantity: 8 },
-    { name: 'Stone Pieces', quantity: 6 }
+    { name: 'Wood', quantity: 8 },
+    { name: 'Stone', quantity: 6 }
   ];
 }
 
@@ -275,13 +276,13 @@ function hasResourcesToUpgrade(monsterGroup, structure) {
   
   // Simple resource requirements for upgrades based on level
   const requiredResources = [
-    { name: 'WOODEN_STICKS', quantity: 5 * currentLevel },
-    { name: 'STONE_PIECES', quantity: 3 * currentLevel }
+    { name: 'WOOD', quantity: 5 * currentLevel },
+    { name: 'STONE', quantity: 3 * currentLevel }
   ];
   
   // Add special resources for higher levels
   if (currentLevel >= 2) {
-    requiredResources.push({ name: 'IRON_ORE', quantity: currentLevel });
+    requiredResources.push({ name: 'METAL_ORE', quantity: currentLevel });
   }
   
   if (currentLevel >= 3) {
@@ -437,12 +438,12 @@ export async function upgradeMonsterStructure(db, worldId, monsterGroup, structu
 
   // Generate resource requirements for upgrade
   const requiredResources = [
-    { name: 'WOODEN_STICKS', quantity: 5 * currentLevel },
-    { name: 'STONE_PIECES', quantity: 3 * currentLevel }
+    { name: 'WOOD', quantity: 5 * currentLevel },
+    { name: 'STONE', quantity: 3 * currentLevel }
   ];
 
   if (currentLevel >= 2) {
-    requiredResources.push({ name: 'IRON_ORE', quantity: currentLevel });
+    requiredResources.push({ name: 'METAL_ORE', quantity: currentLevel });
   }
 
   const remainingItems = consumeResourcesFromItems(monsterGroup.items || {}, requiredResources);
@@ -632,15 +633,17 @@ export async function addOrUpgradeMonsterBuilding(db, worldId, monsterGroup, str
   // Base requirements
   if (buildingDef.baseRequirements) {
     for (const req of buildingDef.baseRequirements) {
+      // baseRequirements are code-based; carry the code through as the name so
+      // the uppercase resource matching below resolves to the item code.
       resources.push({
-        name: req.name,
+        name: req.code || req.name,
         quantity: Math.floor(req.quantity * (isUpgrade ? levelMultiplier * 0.7 : 1))
       });
     }
   } else {
     // Default requirements if none specified
-    resources.push({ name: 'Wooden Sticks', quantity: Math.floor(5 * levelMultiplier) });
-    resources.push({ name: 'Stone Pieces', quantity: Math.floor(3 * levelMultiplier) });
+    resources.push({ name: 'Wood', quantity: Math.floor(5 * levelMultiplier) });
+    resources.push({ name: 'Stone', quantity: Math.floor(3 * levelMultiplier) });
   }
   
   // Check if monster group has the required resources

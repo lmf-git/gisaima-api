@@ -1,4 +1,17 @@
+import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { Ops } from '../../lib/ops.js';
+
+// Resolve an inventory item to its canonical ITEMS code.
+function itemCode(item) {
+  if (!item) return '';
+  if (item.code && ITEMS[item.code]) return item.code;
+  if (item.id && ITEMS[item.id]) return item.id;
+  if (item.name) {
+    const k = Object.keys(ITEMS).find(c => ITEMS[c].name === item.name);
+    if (k) return k;
+  }
+  return (item.code || item.id || item.name || '').toString().toUpperCase().replace(/ /g, '_');
+}
 
 export async function cancelCrafting({ uid, data, db }) {
   const { worldId, craftingId } = data;
@@ -19,12 +32,13 @@ export async function cancelCrafting({ uid, data, db }) {
   const inventory  = player.inventory || [];
   const updatedInv = Array.isArray(inventory) ? [...inventory] : Object.values(inventory);
 
-  for (const [matName, amount] of Object.entries(crafting.materials)) {
+  // crafting.materials is keyed by item code; refund 90% matched by code.
+  for (const [matCode, amount] of Object.entries(crafting.materials)) {
     const refund = Math.floor(amount * 0.9);
     if (refund <= 0) continue;
-    const existing = updatedInv.find(i => i.name === matName);
+    const existing = updatedInv.find(i => itemCode(i) === matCode);
     if (existing) existing.quantity += refund;
-    else updatedInv.push({ name: matName, quantity: refund, type: 'resource' });
+    else updatedInv.push({ code: matCode, name: ITEMS[matCode]?.name || matCode, quantity: refund, type: 'resource' });
   }
 
   const ops = new Ops();

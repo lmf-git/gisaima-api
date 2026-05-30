@@ -28,11 +28,14 @@ export async function getPlayerJoinedWorlds(db, userId) {
   return doc?.worlds ? Object.keys(doc.worlds) : [];
 }
 
-/** Atomically increment world.info.playerCount — safe under concurrent requests */
+/** Atomically increment world.info.playerCount — safe under concurrent requests.
+ * upsert:false so a join never fabricates a seedless world doc — that stub would
+ * shadow a later seed/restore ($setOnInsert no-ops) and crash the tick's
+ * TerrainGenerator with a missing seed. */
 export async function incrementPlayerCount(db, worldId) {
   await db.collection('worlds').updateOne(
     { _id: worldId },
     { $inc: { 'info.playerCount': 1 } },
-    { upsert: true }
+    { upsert: false }
   );
 }

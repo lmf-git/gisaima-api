@@ -26,15 +26,17 @@ export async function startStructureUpgrade({ uid, data, db }) {
   if (!playerDoc?.worlds?.[worldId]) throw err(404, 'Player data not found');
   const player = playerDoc.worlds[worldId];
 
-  const requiredResources = getUpgradeRequirements(structure.type, currentLevel);
+  // Requirements are keyed by item code; the display name is resolved from
+  // ITEMS so names live in one place (ITEMS.js) rather than being duplicated here.
+  const requiredResources = getUpgradeRequirements(structure.type, currentLevel)
+    .map(r => ({ code: r.code, name: reqName(r.code), quantity: r.quantity }));
 
   const bankItems   = structure.banks?.[uid] || {};
   const sharedItems = isOwner ? (structure.items || {}) : {};
   const available   = _mergeResources(bankItems, sharedItems);
 
   for (const res of requiredResources) {
-    const key  = normalizeKey(res.name);
-    const have = available[key] || 0;
+    const have = available[res.code] || 0;
     if (have < res.quantity) throw err(409, `Insufficient ${res.name}: need ${res.quantity}, have ${have}`);
   }
 
@@ -56,6 +58,7 @@ export async function startStructureUpgrade({ uid, data, db }) {
   const { updatedBank, updatedShared } = _deductResources(
     bankItems, isOwner ? sharedItems : {}, requiredResources
   );
+
 
   const ops = new Ops();
   ops.world(worldId, `upgrades.${upgradeId}`, upgradeData);
@@ -80,6 +83,12 @@ function normalizeKey(name) {
   return k || name.toUpperCase().replace(/ /g, '_');
 }
 
+// Display name for a requirement code — sourced from ITEMS so resource names
+// live in one place. Falls back to a humanised code for items not in ITEMS yet.
+function reqName(code) {
+  return ITEMS[code]?.name || code.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function _mergeResources(bank, shared) {
   const out = {};
   const add = obj => {
@@ -99,7 +108,7 @@ function _mergeResources(bank, shared) {
 }
 
 function _deductResources(bank, shared, resources) {
-  const remaining     = Object.fromEntries(resources.map(r => [normalizeKey(r.name), r.quantity]));
+  const remaining     = Object.fromEntries(resources.map(r => [r.code, r.quantity]));
   const updatedBank   = typeof bank === 'object' && !Array.isArray(bank) ? { ...bank } : {};
   const updatedShared = typeof shared === 'object' && !Array.isArray(shared) ? { ...shared } : {};
 
@@ -122,20 +131,20 @@ function _deductResources(bank, shared, resources) {
 function getUpgradeRequirements(structureType, currentLevel) {
   const m = currentLevel * 1.5;
   const resources = [
-    { name: 'Wooden Sticks', quantity: Math.floor(10 * m) },
-    { name: 'Stone Pieces',  quantity: Math.floor(8  * m) }
+    { code: 'WOOD',  quantity: Math.floor(10 * m) },
+    { code: 'STONE', quantity: Math.floor(8  * m) }
   ];
-  if (['fortress','stronghold'].includes(structureType)) resources.push({ name: 'Iron Ore', quantity: Math.floor(5 * m) });
-  if (structureType === 'watchtower') resources.push({ name: 'Rope', quantity: Math.floor(3 * m) });
+  if (['fortress','stronghold'].includes(structureType)) resources.push({ code: 'METAL_ORE', quantity: Math.floor(5 * m) });
+  if (structureType === 'watchtower') resources.push({ code: 'ROPE', quantity: Math.floor(3 * m) });
   if (structureType === 'citadel') {
-    resources.push({ name: 'Iron Ore', quantity: Math.floor(8 * m) });
-    resources.push({ name: 'Gold Ore', quantity: Math.floor(3 * m) });
+    resources.push({ code: 'METAL_ORE', quantity: Math.floor(8 * m) });
+    resources.push({ code: 'GOLD_ORE', quantity: Math.floor(3 * m) });
   }
   if (structureType === 'spawn') {
     resources.forEach(r => { r.quantity = Math.floor(r.quantity * 1.5); });
-    resources.push({ name: 'Crystal Shard', quantity: currentLevel });
+    resources.push({ code: 'CRYSTAL_SHARD', quantity: currentLevel });
   }
-  if (currentLevel >= 3) resources.push({ name: 'Crystal Shard', quantity: currentLevel - 2 });
+  if (currentLevel >= 3) resources.push({ code: 'CRYSTAL_SHARD', quantity: currentLevel - 2 });
   return resources;
 }
 

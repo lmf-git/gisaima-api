@@ -13,7 +13,7 @@ function _categoryFor(itemKey) {
   const k = (itemKey || '').toUpperCase();
   if (k.includes('WHEAT') || k.includes('GRAIN') || k.includes('BERRY') ||
       k.includes('HERB')  || k.includes('FOOD')  || k.includes('FRUIT')) return 'farm';
-  if (k.includes('ORE')   || k.includes('IRON')  || k.includes('STONE') ||
+  if (k.includes('ORE')   || k.includes('METAL')  || k.includes('STONE') ||
       k.includes('CRYSTAL') || k.includes('GEM')  || k.includes('COAL')) return 'mine';
   if (k.includes('WOOD')  || k.includes('STICK') || k.includes('LOG')   ||
       k.includes('TIMBER')) return 'building';

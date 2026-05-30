@@ -7,10 +7,10 @@
  * world's `coffers` collection.
  *
  * Buildings recognised:
- *   mine     → IRON_ORE / STONE_PIECES
+ *   mine     → METAL_ORE / STONE
  *   farm     → WHEAT / BERRIES
  *   smithy   → CRUDE_WEAPON (slower)
- *   workshop → WOODEN_STICKS (slower)
+ *   workshop → WOOD (slower)
  *   market   → GOLD (commerce yield)
  *
  * The output rates are deliberately modest — they fill stores over many
@@ -20,12 +20,12 @@ import { merge } from 'gisaima-shared/economy/items.js';
 import { applyProductionTax } from '../db/productionTax.js';
 
 const BUILDING_OUTPUT = {
-  mine:     [['IRON_ORE',       1, 0.5], ['STONE_PIECES', 2, 1.0]],
-  quarry:   [['STONE_PIECES',   3, 1.5]],
-  lumberyard: [['WOODEN_STICKS', 4, 2.0]],
+  mine:     [['METAL_ORE',       1, 0.5], ['STONE', 2, 1.0]],
+  quarry:   [['STONE',   3, 1.5]],
+  lumberyard: [['WOOD', 4, 2.0]],
   farm:     [['WHEAT',          3, 1.5], ['BERRIES',     1, 0.5]],
   smithy:   [['CRUDE_WEAPON',   1, 0.2]],
-  workshop: [['WOODEN_STICKS',  2, 1.0]],
+  workshop: [['WOOD',  2, 1.0]],
   market:   [['GOLD',           5, 2.5]],
   stable:   [['LEATHER',        1, 0.4]],
   barracks: [], // produces via the recruit queue, not passively

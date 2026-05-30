@@ -1,6 +1,20 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { ITEMS, getRecipeById } from 'gisaima-shared/definitions/ITEMS.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
+
+// Resolve an inventory item to its canonical ITEMS code, tolerating items that
+// carry a code, an item key as id, or only a display name.
+function itemCode(item) {
+  if (!item) return '';
+  if (item.code && ITEMS[item.code]) return item.code;
+  if (item.id && ITEMS[item.id]) return item.id;
+  if (item.name) {
+    const k = Object.keys(ITEMS).find(c => ITEMS[c].name === item.name);
+    if (k) return k;
+  }
+  return (item.code || item.id || item.name || '').toString().toUpperCase().replace(/ /g, '_');
+}
 
 export async function startCrafting({ uid, data, db }) {
   const { worldId, x, y, recipeId } = data;
@@ -8,7 +22,9 @@ export async function startCrafting({ uid, data, db }) {
     throw err(400, 'Missing required parameters');
   }
 
-  const recipe = RECIPES.find(r => r.id === recipeId);
+  // Recipes are defined once in shared ITEMS.js (item.recipe) and surfaced via
+  // getRecipeById — the same source the crafting UI reads, keyed by item code.
+  const recipe = getRecipeById(recipeId);
   if (!recipe) throw err(404, 'Recipe not found');
 
   const chunkKey = getChunkKey(x, y);
@@ -37,12 +53,18 @@ export async function startCrafting({ uid, data, db }) {
     if (!hasBuilding) throw err(409, `This recipe requires a ${type} of level ${level} or higher`);
   }
 
+  // Tally inventory by item code so material requirements (also codes) match
+  // regardless of whether the inventory is array- or object-shaped.
   const inventory = player.inventory || {};
-  for (const [matName, needed] of Object.entries(recipe.materials)) {
-    const have = Array.isArray(inventory)
-      ? inventory.filter(i => i.name === matName).reduce((s, i) => s + (i.quantity || 0), 0)
-      : Object.values(inventory).filter(i => i.name === matName).reduce((s, i) => s + (i.quantity || 0), 0);
-    if (have < needed) throw err(409, `Not enough ${matName}. Need ${needed}, have ${have}.`);
+  const invList   = Array.isArray(inventory) ? inventory : Object.values(inventory);
+  const haveByCode = {};
+  for (const it of invList) {
+    const c = itemCode(it);
+    if (c) haveByCode[c] = (haveByCode[c] || 0) + (it.quantity || 0);
+  }
+  for (const [matCode, needed] of Object.entries(recipe.materials)) {
+    const have = haveByCode[matCode] || 0;
+    if (have < needed) throw err(409, `Not enough ${ITEMS[matCode]?.name || matCode}. Need ${needed}, have ${have}.`);
   }
 
   let modifier = 1.0 - Math.min(0.5, (craftingLevel - 1) * 0.05);
@@ -56,33 +78,35 @@ export async function startCrafting({ uid, data, db }) {
     }
   }
   modifier = Math.max(0.1, modifier);
-  const finalTicks = Math.ceil((recipe.craftingTime || 1) * modifier);
+  const finalTicks = Math.max(1, Math.ceil((recipe.ticksRequired || 1) * modifier));
 
   const now        = Date.now();
   const craftingId = `crafting_${worldId}_${uid}_${now}`;
 
+  // Spend materials from inventory, matching by code and preserving shape.
   const matsCopy = { ...recipe.materials };
   let updatedInv;
   if (Array.isArray(inventory)) {
     updatedInv = [];
     for (const item of inventory) {
-      const need = matsCopy[item.name] || 0;
+      const c    = itemCode(item);
+      const need = matsCopy[c] || 0;
       if (need > 0) {
-        const use = Math.min(need, item.quantity);
-        matsCopy[item.name] -= use;
-        if (item.quantity > use) updatedInv.push({ ...item, quantity: item.quantity - use });
+        const use = Math.min(need, item.quantity || 0);
+        matsCopy[c] -= use;
+        if ((item.quantity || 0) > use) updatedInv.push({ ...item, quantity: item.quantity - use });
       } else { updatedInv.push(item); }
     }
   } else {
     updatedInv = { ...inventory };
-    for (const [matName, need] of Object.entries(matsCopy)) {
+    for (const matCode of Object.keys(matsCopy)) {
       for (const [iid, item] of Object.entries(updatedInv)) {
-        if (item.name !== matName) continue;
-        const use = Math.min(need, item.quantity || 0);
-        matsCopy[matName] -= use;
-        if (item.quantity - use <= 0) delete updatedInv[iid];
+        if (matsCopy[matCode] <= 0) break;
+        if (itemCode(item) !== matCode) continue;
+        const use = Math.min(matsCopy[matCode], item.quantity || 0);
+        matsCopy[matCode] -= use;
+        if ((item.quantity || 0) - use <= 0) delete updatedInv[iid];
         else updatedInv[iid] = { ...item, quantity: item.quantity - use };
-        if (matsCopy[matName] <= 0) break;
       }
     }
   }
@@ -92,7 +116,14 @@ export async function startCrafting({ uid, data, db }) {
     worldId, structureId: structure.id, structureLocation: { x, y },
     startedAt: now, ticksRequired: finalTicks, ticksCompleted: 0,
     materials: recipe.materials,
-    result: { name: recipe.result.name, type: recipe.result.type, quantity: recipe.result.quantity || 1, rarity: recipe.result.rarity || 'common', description: recipe.result.description },
+    result: {
+      code: recipe.result.id,
+      name: recipe.result.name,
+      type: recipe.result.type,
+      quantity: recipe.result.quantity || 1,
+      rarity: recipe.result.rarity || 'common',
+      description: recipe.result.description
+    },
     status: 'in_progress', processed: false
   };
 
@@ -112,16 +143,5 @@ export async function startCrafting({ uid, data, db }) {
 }
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }
-
-const RECIPES = [
-  { id: 'wooden_sword', name: 'Wooden Sword', category: 'weapon', materials: { 'Wooden Sticks': 5 }, result: { name: 'Wooden Sword', type: 'weapon', rarity: 'common', quantity: 1, description: 'A basic wooden sword.' }, craftingTime: 1, requiredLevel: 1 },
-  { id: 'stone_sword',  name: 'Stone Sword',  category: 'weapon', materials: { 'Wooden Sticks': 2, 'Stone Pieces': 5 }, result: { name: 'Stone Sword', type: 'weapon', rarity: 'common', quantity: 1, description: 'A stone-bladed sword.' }, craftingTime: 2, requiredLevel: 2 },
-  { id: 'iron_sword',   name: 'Iron Sword',   category: 'weapon', materials: { 'Wooden Sticks': 2, 'Iron Ingot': 3 }, result: { name: 'Iron Sword', type: 'weapon', rarity: 'uncommon', quantity: 1, description: 'A well-crafted iron sword.' }, craftingTime: 3, requiredLevel: 3, requiredBuilding: { type: 'smithy', level: 2 } },
-  { id: 'herbal_tea',   name: 'Herbal Tea',   category: 'consumable', materials: { 'Medicinal Herb': 2, 'Water Vial': 1 }, result: { name: 'Herbal Tea', type: 'consumable', rarity: 'common', quantity: 2, description: 'A soothing tea.' }, craftingTime: 1, requiredLevel: 1, requiredBuilding: { type: 'farm', level: 1 } },
-  { id: 'hearty_stew',  name: 'Hearty Stew',  category: 'consumable', materials: { 'Vegetables': 3, 'Meat': 2, 'Water Vial': 1 }, result: { name: 'Hearty Stew', type: 'consumable', rarity: 'uncommon', quantity: 2, description: 'A filling meal.' }, craftingTime: 2, requiredLevel: 2, requiredBuilding: { type: 'farm', level: 2 } },
-  { id: 'minor_mana_potion', name: 'Minor Mana Potion', category: 'consumable', materials: { 'Blue Herb': 3, 'Crystal Water': 1 }, result: { name: 'Minor Mana Potion', type: 'consumable', rarity: 'common', quantity: 2, description: 'Restores mana.' }, craftingTime: 1, requiredLevel: 2, requiredBuilding: { type: 'academy', level: 1 } },
-  { id: 'miners_lamp',  name: "Miner's Lamp",  category: 'tool', materials: { 'Iron Ingot': 1, 'Oil': 2, 'Glass': 1 }, result: { name: "Miner's Lamp", type: 'tool', rarity: 'common', quantity: 1, description: 'Improves mining.' }, craftingTime: 2, requiredLevel: 2, requiredBuilding: { type: 'mine', level: 1 } },
-  { id: 'trading_contract', name: 'Trading Contract', category: 'document', materials: { 'Parchment': 2, 'Ink': 1 }, result: { name: 'Trading Contract', type: 'document', rarity: 'common', quantity: 3, description: 'A basic trade document.' }, craftingTime: 1, requiredLevel: 1, requiredBuilding: { type: 'market', level: 1 } }
-];
 
 export default startCrafting;

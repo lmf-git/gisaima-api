@@ -57,9 +57,13 @@ async function seed() {
     const info   = worldData.info || {};
     const chunks = worldData.chunks || {};
 
+    // Use $set (not $setOnInsert) so re-seeding a world that already exists is a
+    // true restore. Previously $setOnInsert silently skipped `info` whenever a
+    // stub world doc already existed (e.g. one created by the tick's upsert),
+    // which dropped `info.seed` and broke TerrainGenerator.
     await db.collection('worlds').updateOne(
       { _id: worldId },
-      { $setOnInsert: { _id: worldId, info } },
+      { $set: { info }, $setOnInsert: { _id: worldId } },
       { upsert: true }
     );
     console.log(`  World "${worldId}" — ${Object.keys(chunks).length} chunks`);
@@ -67,7 +71,7 @@ async function seed() {
     for (const [chunkKey, tiles] of Object.entries(chunks)) {
       await db.collection('chunks').updateOne(
         { worldId, chunkKey },
-        { $setOnInsert: { worldId, chunkKey, tiles: tiles || {} } },
+        { $set: { tiles: tiles || {} }, $setOnInsert: { worldId, chunkKey } },
         { upsert: true }
       );
     }

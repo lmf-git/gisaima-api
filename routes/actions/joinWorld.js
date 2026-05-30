@@ -5,12 +5,15 @@
 import { incrementPlayerCount, getPlayerWorldData, setPlayerWorldData } from '../../db/players.js';
 
 export async function joinWorld({ uid, data, db }) {
-  const { worldId, race, displayName, spawnPosition } = data;
+  const { worldId, race, displayName, houseName, spawnPosition } = data;
 
   if (!worldId) throw err(400, 'worldId is required');
   if (!race)    throw err(400, 'race is required');
   if (displayName && (displayName.length < 2 || displayName.length > 20)) {
     throw err(400, 'displayName must be between 2 and 20 characters');
+  }
+  if (houseName && houseName.length > 24) {
+    throw err(400, 'houseName must be 24 characters or fewer');
   }
 
   const world = await db.collection('worlds').findOne({ _id: worldId });
@@ -27,6 +30,7 @@ export async function joinWorld({ uid, data, db }) {
     race,
     alive: false,
     displayName: displayName || '',
+    houseName: (houseName || '').trim(),
     id: uid,
     lastLocation: { x: coordinates.x, y: coordinates.y, timestamp: Date.now() }
   });

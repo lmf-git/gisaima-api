@@ -12,6 +12,7 @@ import { updateWorldVisibility, refreshIfStale } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 
 import { mergeWorldMonsterGroups, monsterSpawnTick, spawnMonsters } from '../events/monsterSpawnTick.js';
+import { processStarvation }       from '../events/starvationTick.js';
 import { processBattle }           from '../events/battleTick.js';
 import { processMobilizations }    from '../events/mobiliseTick.js';
 import { processDemobilization }   from '../events/demobiliseTick.js';
@@ -90,9 +91,15 @@ async function runTick() {
 
 async function processWorld(db, worldId, worldData, now) {
   const worldInfo = worldData?.info || {};
+  if (worldInfo.seed === undefined || worldInfo.seed === null || worldInfo.seed === '') {
+    console.error(`[tick] world ${worldId} skipped: info.seed is missing (re-seed/restore this world)`);
+    return;
+  }
   const terrainGenerator = new TerrainGenerator(worldInfo.seed, 10_000);
 
   // Advance tick counter alongside lastTick so in-world time-of-day works.
+  // upsert:false so the tick never fabricates a seedless world doc — worlds are
+  // created only by the seed/restore path, never here.
   const prevTickCount = Number(worldInfo.tickCount) || 0;
   await db.collection('worlds').updateOne(
     { _id: worldId },
@@ -100,7 +107,7 @@ async function processWorld(db, worldId, worldData, now) {
       $set: { 'info.lastTick': now },
       $inc: { 'info.tickCount': 1 }
     },
-    { upsert: true }
+    { upsert: false }
   );
   worldInfo.tickCount = prevTickCount + 1;
 
@@ -134,6 +141,11 @@ async function processWorld(db, worldId, worldData, now) {
   const timings = {};
   let _t = Date.now();
   const mark = (label) => { timings[label] = (timings[label] || 0) + (Date.now() - _t); _t = Date.now(); };
+
+  // --- Pass 0: starvation (settle hunger before anything else so a unit can
+  // never starve mid-battle in the same tick that resolves that battle) ---
+  processStarvation(worldId, ops, chunks, now);
+  mark('starvation');
 
   // --- Pass 1: battles (must resolve before movement / mobilisation) ---
   for (const chunkKey in chunks) {

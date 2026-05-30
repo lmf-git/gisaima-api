@@ -32,12 +32,27 @@ export async function startBuildingUpgrade({ uid, data, db }) {
   if (!playerDoc?.worlds?.[worldId]) throw err(404, 'Player data not found');
   const player = playerDoc.worlds[worldId];
 
-  const requiredResources = BUILDINGS.getUpgradeRequirements(building.type, currentLevel);
+  // Requirements are code-based (display names resolved from ITEMS). Support
+  // legacy entries that only carry a name via normalizeKey().
+  const requiredResources = BUILDINGS.getUpgradeRequirements(building.type, currentLevel)
+    .map(r => ({ code: r.code || normalizeKey(r.name), quantity: r.quantity }))
+    .map(r => ({ ...r, name: ITEMS[r.code]?.name || r.code }));
 
-  const structureItems = Array.isArray(structure.items) ? structure.items : [];
+  // Available resources from the shared pool, supporting both the array shape
+  // (legacy [{name,quantity}]) and the object shape ({ CODE: qty }).
+  const isArr = Array.isArray(structure.items);
+  const avail = {};
+  if (isArr) {
+    for (const it of structure.items) {
+      const c = ITEMS[it.id] ? it.id : normalizeKey(it.name || it.id);
+      if (c) avail[c] = (avail[c] || 0) + (it.quantity || 0);
+    }
+  } else if (structure.items && typeof structure.items === 'object') {
+    for (const [k, v] of Object.entries(structure.items)) avail[k.toUpperCase()] = (avail[k.toUpperCase()] || 0) + (v || 0);
+  }
+
   for (const res of requiredResources) {
-    const found = structureItems.find(i => i.name === res.name || normalizeKey(i.name) === normalizeKey(res.name));
-    const have  = found?.quantity || 0;
+    const have = avail[res.code] || 0;
     if (have < res.quantity) throw err(409, `Insufficient ${res.name}: need ${res.quantity}, have ${have}`);
   }
 
@@ -45,12 +60,27 @@ export async function startBuildingUpgrade({ uid, data, db }) {
   const now           = Date.now();
   const upgradeId     = `building_upgrade_${worldId}_${buildingId}_${now}`;
 
-  const updatedItems = structureItems.map(item => {
-    const res = requiredResources.find(r => r.name === item.name || normalizeKey(r.name) === normalizeKey(item.name));
-    if (!res) return item;
-    const remaining = item.quantity - res.quantity;
-    return remaining > 0 ? { ...item, quantity: remaining } : null;
-  }).filter(Boolean);
+  const spend = {};
+  for (const res of requiredResources) spend[res.code] = (spend[res.code] || 0) + res.quantity;
+
+  let updatedItems;
+  if (isArr) {
+    updatedItems = structure.items.map(item => {
+      const c = ITEMS[item.id] ? item.id : normalizeKey(item.name || item.id);
+      const take = spend[c] || 0;
+      if (!take) return item;
+      spend[c] = 0;
+      const remaining = (item.quantity || 0) - take;
+      return remaining > 0 ? { ...item, quantity: remaining } : null;
+    }).filter(Boolean);
+  } else {
+    updatedItems = { ...(structure.items || {}) };
+    for (const [code, need] of Object.entries(spend)) {
+      const key = Object.keys(updatedItems).find(k => k.toUpperCase() === code) || code;
+      const remaining = (updatedItems[key] || 0) - need;
+      if (remaining > 0) updatedItems[key] = remaining; else delete updatedItems[key];
+    }
+  }
 
   const upgradeData = {
     id: upgradeId, type: 'building', worldId, buildingId,

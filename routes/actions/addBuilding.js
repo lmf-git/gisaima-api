@@ -81,7 +81,9 @@ export async function addBuilding({ uid, data, db }) {
   const missing = [];
   const spend = {};
   for (const r of reqs) {
-    const code = nameToCode(r.name);
+    // Requirements are code-based now; fall back to name resolution for any
+    // legacy entries still keyed by display name.
+    const code = r.code || nameToCode(r.name);
     spend[code] = (spend[code] || 0) + r.quantity;
   }
   for (const [code, need] of Object.entries(spend)) {
