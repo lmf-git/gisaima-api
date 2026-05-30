@@ -3,16 +3,22 @@
  */
 
 import { incrementPlayerCount, getPlayerWorldData, setPlayerWorldData } from '../../db/players.js';
+import { foundHouseForPlayer, joinHouseForPlayer } from '../../db/houses.js';
 
 export async function joinWorld({ uid, data, db }) {
-  const { worldId, race, displayName, houseName, spawnPosition } = data;
+  const { worldId, race, displayName, houseName, houseId, spawnPosition } = data;
 
   if (!worldId) throw err(400, 'worldId is required');
   if (!race)    throw err(400, 'race is required');
   if (displayName && (displayName.length < 2 || displayName.length > 20)) {
     throw err(400, 'displayName must be between 2 and 20 characters');
   }
-  if (houseName && houseName.length > 24) {
+  // Every player must belong to a house: either join an existing one (houseId)
+  // or found a new one (houseName).
+  if (!houseId && !(houseName && houseName.trim())) {
+    throw err(400, 'a house is required: provide houseId or houseName');
+  }
+  if (houseName && houseName.trim().length > 24) {
     throw err(400, 'houseName must be 24 characters or fewer');
   }
 
@@ -30,14 +36,20 @@ export async function joinWorld({ uid, data, db }) {
     race,
     alive: false,
     displayName: displayName || '',
-    houseName: (houseName || '').trim(),
     id: uid,
     lastLocation: { x: coordinates.x, y: coordinates.y, timestamp: Date.now() }
   });
 
+  // Place the player in a house (founds or joins, and denormalises houseId +
+  // houseName onto the player doc just written above).
+  const name = (displayName || '').trim() || 'Unknown';
+  const house = houseId
+    ? await joinHouseForPlayer(db, worldId, uid, name, houseId)
+    : await foundHouseForPlayer(db, worldId, uid, name, houseName.trim());
+
   if (isNewPlayer) await incrementPlayerCount(db, worldId);
 
-  return { success: true, worldId, coordinates, isNewPlayer };
+  return { success: true, worldId, coordinates, isNewPlayer, houseId: house._id.toString(), houseName: house.name };
 }
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }

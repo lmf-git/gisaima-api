@@ -5,6 +5,7 @@ import { getPlayerWorlds, getPlayerWorldState }         from './players.js';
 import { postChat }                                     from './chat.js';
 import { getReports, postReportRead }                   from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
+import { getHouses, postCreateHouse, postJoinHouse }    from './houses.js';
 import { getBounties, postBounty, postBountyClaim }     from './bounties.js';
 import { getFriends, getFriendRequests, postFriendRequest,
          postAcceptRequest, postDeclineRequest, postRemoveFriend } from './friends.js';
@@ -119,6 +120,9 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && !s4)                return postCreateTribe(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && s4 === 'join')      return postJoinTribe(db, auth, s2, body.tribeId);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && s4 === 'leave')     return postLeaveTribe(db, auth, s2);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'houses')                       return getHouses(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && !s4)                return postCreateHouse(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 === 'join')      return postJoinHouse(db, auth, s2, body.houseId);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && !s4)              return postBounty(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && s4)               return postBountyClaim(db, auth, s2, s4);
 
