@@ -1,9 +1,9 @@
 import { ObjectId } from 'mongodb';
-import { patchPlayerWorldData } from './players.js';
 
 // A "house" is a player faction within a single world. Membership is mandatory:
-// every player in a world belongs to exactly one house. The player's world doc
-// keeps a denormalised `houseId` + `houseName` for cheap reads (e.g. the HUD).
+// every player in a world belongs to exactly one house. The house's `members[]`
+// is the single source of truth — the player's id/name are resolved from it on
+// read (see getPlayerWorldState), never stored back onto the player doc.
 
 export async function getWorldHouses(db, worldId) {
   return db.collection('houses').find({ worldId }).sort({ createdAt: 1 }).toArray();
@@ -62,10 +62,7 @@ export async function foundHouseForPlayer(db, worldId, uid, displayName, name) {
     createdAt: Date.now(),
   };
   const result = await db.collection('houses').insertOne(doc);
-  const house = { ...doc, _id: result.insertedId };
-
-  await patchPlayerWorldData(db, uid, worldId, { houseId: house._id.toString(), houseName: name });
-  return house;
+  return { ...doc, _id: result.insertedId };
 }
 
 /** Join an existing house and move the player into it. Returns the house doc. */
@@ -75,18 +72,12 @@ export async function joinHouseForPlayer(db, worldId, uid, displayName, houseId)
     throw Object.assign(new Error('House not found'), { status: 404 });
   }
 
-  // Already a member — nothing to move.
-  if ((house.members || []).some(m => m.uid === uid)) {
-    await patchPlayerWorldData(db, uid, worldId, { houseId: house._id.toString(), houseName: house.name });
-    return house;
-  }
+  if ((house.members || []).some(m => m.uid === uid)) return house;
 
   await leaveCurrentHouse(db, worldId, uid);
   await db.collection('houses').updateOne(
     { _id: house._id },
     { $push: { members: { uid, displayName, joinedAt: Date.now() } } }
   );
-
-  await patchPlayerWorldData(db, uid, worldId, { houseId: house._id.toString(), houseName: house.name });
   return house;
 }

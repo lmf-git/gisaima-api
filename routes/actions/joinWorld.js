@@ -40,9 +40,9 @@ export async function joinWorld({ uid, data, db }) {
     lastLocation: { x: coordinates.x, y: coordinates.y, timestamp: Date.now() }
   });
 
-  // Place the player in a house (founds or joins, and denormalises houseId +
-  // houseName onto the player doc just written above).
-  const name = (displayName || '').trim() || 'Unknown';
+  // Place the player in a house. The house's members[] is the source of truth;
+  // the player's house is resolved from it on read, not stored on the player.
+  const name = (displayName || '').trim();
   const house = houseId
     ? await joinHouseForPlayer(db, worldId, uid, name, houseId)
     : await foundHouseForPlayer(db, worldId, uid, name, houseName.trim());

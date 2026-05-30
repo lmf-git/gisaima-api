@@ -6,7 +6,7 @@ function err(status, msg) { return Object.assign(new Error(msg), { status }); }
 
 async function resolveDisplayName(db, worldId, uid) {
   const playerDoc = await db.collection('players').findOne({ _id: uid });
-  return playerDoc?.worlds?.[worldId]?.displayName || 'Unknown';
+  return playerDoc?.worlds?.[worldId]?.displayName || '';
 }
 
 export async function getHouses(db, auth, worldId) {
