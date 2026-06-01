@@ -4,6 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
+import { broadcastToUser } from '../../core/ws.js';
 
 export async function joinBattle({ uid, data, db }) {
   const { groupId, battleId, side, locationX, locationY, worldId = 'default' } = data;
@@ -59,6 +60,9 @@ export async function joinBattle({ uid, data, db }) {
   });
 
   await ops.flush(db);
+
+  broadcastToUser(uid, { type: 'achievement_unlocked', achievementId: 'battle_joiner', worldId });
+
   return { success: true, message: `Joined battle on ${sideName}'s side`, battleId };
 }
 

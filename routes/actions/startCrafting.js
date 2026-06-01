@@ -2,6 +2,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { ITEMS, getRecipeById } from 'gisaima-shared/definitions/ITEMS.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
+import { grantAchievement } from '../../lib/achievements.js';
 
 // Resolve an inventory item to its canonical ITEMS code, tolerating items that
 // carry a code, an item key as id, or only a display name.
@@ -139,6 +140,9 @@ export async function startCrafting({ uid, data, db }) {
   });
 
   await ops.flush(db);
+
+  await grantAchievement(db, uid, worldId, 'first_craft');
+
   return { success: true, craftingId, ticksRequired: finalTicks, result: craftingData.result };
 }
 

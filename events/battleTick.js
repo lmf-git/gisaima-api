@@ -14,6 +14,7 @@ import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
 import { applyKillEffect as applyMoralityKillEffect } from "../db/morality.js";
 import { killCharacter } from "../db/lives.js";
+import { broadcastToUser } from "../core/ws.js";
 import { ObjectId } from "mongodb";
 
 // Resolve a character's lifeId to its owning uid (null if not a real life).
@@ -880,6 +881,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       // Grant first_victory achievement to players on the winning side
       const winningSurviving = winner === 1 ? side1Surviving : winner === 2 ? side2Surviving : [];
       const battleEndTime = Date.now();
+      const victorUids = new Set();
       for (const groupId of winningSurviving) {
         const group = tile.groups?.[groupId];
         if (!group?.units) continue;
@@ -889,9 +891,13 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             if (ownerUid) {
               ops.player(ownerUid, worldId, 'achievements.first_victory', true);
               ops.player(ownerUid, worldId, 'achievements.first_victory_date', battleEndTime);
+              victorUids.add(ownerUid);
             }
           }
         }
+      }
+      for (const ownerUid of victorUids) {
+        broadcastToUser(ownerUid, { type: 'achievement_unlocked', achievementId: 'first_victory', worldId });
       }
 
       // Generate side names for chat message

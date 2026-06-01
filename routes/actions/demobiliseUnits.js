@@ -5,6 +5,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
+import { grantAchievement } from '../../lib/achievements.js';
 
 export async function demobiliseUnits({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId = 'default', storageDestination = 'shared' } = data;
@@ -65,6 +66,8 @@ export async function demobiliseUnits({ uid, data, db }) {
   }
 
   await ops.flush(db);
+
+  await grantAchievement(db, uid, worldId, 'demobilizer');
 
   return {
     status: 'demobilising',

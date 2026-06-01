@@ -5,6 +5,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { Ops } from '../../lib/ops.js';
+import { grantAchievement } from '../../lib/achievements.js';
 
 function calculatePath(startX, startY, endX, endY) {
   const path = [{ x: startX, y: startY }];
@@ -84,6 +85,9 @@ export async function moveGroup({ uid, data, db }) {
   });
 
   await ops.flush(db);
+
+  // "First Steps" — drawing/committing a movement path, now verified server-side.
+  await grantAchievement(db, uid, worldId, 'first_steps');
 
   return {
     success: true,

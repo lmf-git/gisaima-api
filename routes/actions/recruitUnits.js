@@ -2,6 +2,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Units } from 'gisaima-shared/units/units.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
+import { grantAchievement } from '../../lib/achievements.js';
 
 export async function recruitUnits({ uid, data, db }) {
   const { structureId, x, y, worldId, unitType, quantity, cost } = data;
@@ -93,14 +94,7 @@ export async function recruitUnits({ uid, data, db }) {
 
   await ops.flush(db);
 
-  const playerDoc = await db.collection('players').findOne({ _id: uid });
-  if (!playerDoc?.worlds?.[worldId]?.achievements?.first_recruit) {
-    await db.collection('players').updateOne(
-      { _id: uid },
-      { $set: { [`worlds.${worldId}.achievements.first_recruit`]: true, [`worlds.${worldId}.achievements.first_recruit_date`]: now } },
-      { upsert: true }
-    );
-  }
+  await grantAchievement(db, uid, worldId, 'first_recruit');
 
   return { success: true, recruitmentId, completesAt };
 }

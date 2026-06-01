@@ -4,6 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
+import { broadcastToUser } from '../../core/ws.js';
 
 export async function attack({ uid, data, db }) {
   const { worldId, attackerGroupIds, defenderGroupIds, structureId, locationX, locationY } = data;
@@ -107,13 +108,19 @@ export async function attack({ uid, data, db }) {
     ops.chunk(worldId, chunkKey, `${locationKey}.structure.battleId`, battleId);
   }
 
+  let achievementOwner = null;
   if (attackerGroups.length) {
-    const ownerId = attackerGroups[0].owner;
-    ops.player(ownerId, worldId, 'achievements.first_attack',      true);
-    ops.player(ownerId, worldId, 'achievements.first_attack_date', now);
+    achievementOwner = attackerGroups[0].owner;
+    ops.player(achievementOwner, worldId, 'achievements.first_attack',      true);
+    ops.player(achievementOwner, worldId, 'achievements.first_attack_date', now);
   }
 
   await ops.flush(db);
+
+  if (achievementOwner) {
+    broadcastToUser(achievementOwner, { type: 'achievement_unlocked', achievementId: 'first_attack', worldId });
+  }
+
   return { success: true, message: 'Attack started successfully', battleId };
 }
 

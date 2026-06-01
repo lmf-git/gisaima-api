@@ -1,6 +1,7 @@
 import { apiError } from '../core/auth.js';
 import { insertChatMessage, trimChatMessages } from '../db/chat.js';
 import { broadcastChatMessage } from '../core/ws.js';
+import { grantAchievement } from '../lib/achievements.js';
 
 export async function postChat(db, auth, worldId, body) {
   const { text, type = 'user', location = null } = body;
@@ -17,5 +18,9 @@ export async function postChat(db, auth, worldId, body) {
   const id = await insertChatMessage(db, worldId, msg);
   await trimChatMessages(db, worldId, 500);
   broadcastChatMessage(worldId, { id: id.toString(), ...msg });
+
+  // "Communicator" — first chat message, granted server-side only.
+  if (type === 'user') await grantAchievement(db, auth.uid, worldId, 'first_message');
+
   return { success: true };
 }

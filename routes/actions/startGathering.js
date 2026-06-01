@@ -4,6 +4,7 @@
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { Ops } from '../../lib/ops.js';
+import { grantAchievement } from '../../lib/achievements.js';
 
 export async function startGathering({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId, gatherUntilFull = false } = data;
@@ -46,15 +47,7 @@ export async function startGathering({ uid, data, db }) {
 
   await ops.flush(db);
 
-  // Achievement (best-effort)
-  const playerDoc = await db.collection('players').findOne({ _id: uid });
-  if (!playerDoc?.worlds?.[worldId]?.achievements?.first_gather) {
-    await db.collection('players').updateOne(
-      { _id: uid },
-      { $set: { [`worlds.${worldId}.achievements.first_gather`]: true } },
-      { upsert: true }
-    );
-  }
+  await grantAchievement(db, uid, worldId, 'first_gather');
 
   return { success: true, message: 'Gathering started', completesIn: GATHER_TICKS };
 }

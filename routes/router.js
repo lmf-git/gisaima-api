@@ -5,7 +5,9 @@ import { getPlayerWorlds, getPlayerWorldState }         from './players.js';
 import { postChat }                                     from './chat.js';
 import { getReports, postReportRead }                   from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
-import { getHouses, postCreateHouse, postJoinHouse }    from './houses.js';
+import { getHouses, postCreateHouse, postRequestJoinHouse,
+         postCancelJoinRequest, postLeaveHouse,
+         postApproveJoinRequest, postRejectJoinRequest } from './houses.js';
 import { getBounties, postBounty, postBountyClaim }     from './bounties.js';
 import { getFriends, getFriendRequests, postFriendRequest,
          postAcceptRequest, postDeclineRequest, postRemoveFriend } from './friends.js';
@@ -39,7 +41,6 @@ import loadGroup             from './actions/loadGroup.js';
 import mobiliseUnits         from './actions/mobiliseUnits.js';
 import moveGroup             from './actions/moveGroup.js';
 import recruitUnits          from './actions/recruitUnits.js';
-import saveAchievement       from './actions/saveAchievement.js';
 import spawnPlayer           from './actions/spawnPlayer.js';
 import startBuildingUpgrade  from './actions/startBuildingUpgrade.js';
 import startCrafting         from './actions/startCrafting.js';
@@ -52,7 +53,7 @@ import setStructureAccess    from './actions/setStructureAccess.js';
 export async function route(db, req, body) {
   const { method } = req;
   const p = new URL(req.url, 'http://localhost').pathname.replace(/\/$/, '') || '/';
-  const [, s1, s2, s3, s4] = p.split('/');
+  const [, s1, s2, s3, s4, s5] = p.split('/');
 
   // ── Healthcheck ───────────────────────────────────────────────────────────
   if (method === 'GET' && p === '/') return { ok: true };
@@ -92,7 +93,6 @@ export async function route(db, req, body) {
   }
   if (method === 'GET' && s1 === 'worlds' && s3 === 'scouting')      return getScouting(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'items' && s4 === 'at') {
-    const [, , , , , s5] = p.split('/');
     // s5 is URL-encoded (e.g. "-23%2C5" for "-23,5"). Decode before parsing.
     return itemRoutes.getAt(db, s2, s5 ? decodeURIComponent(s5) : '');
   }
@@ -127,7 +127,11 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'tribes' && s4 === 'leave')     return postLeaveTribe(db, auth, s2);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'houses')                       return getHouses(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && !s4)                return postCreateHouse(db, auth, s2, body);
-  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 === 'join')      return postJoinHouse(db, auth, s2, body.houseId);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 === 'join')      return postRequestJoinHouse(db, auth, s2, body.houseId);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 === 'cancel')    return postCancelJoinRequest(db, auth, s2, body.houseId);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 === 'leave')     return postLeaveHouse(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 && s5 === 'approve') return postApproveJoinRequest(db, auth, s2, s4, body.uid);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'houses' && s4 && s5 === 'reject')  return postRejectJoinRequest(db, auth, s2, s4, body.uid);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && !s4)              return postBounty(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && s4)               return postBountyClaim(db, auth, s2, s4);
 
@@ -226,7 +230,6 @@ export async function route(db, req, body) {
     if (s2 === 'mobiliseUnits')         return mobiliseUnits(ctx);
     if (s2 === 'moveGroup')             return moveGroup(ctx);
     if (s2 === 'recruitUnits')          return recruitUnits(ctx);
-    if (s2 === 'saveAchievement')       return saveAchievement(ctx);
     if (s2 === 'spawnPlayer')           return spawnPlayer(ctx);
     if (s2 === 'startBuildingUpgrade')  return startBuildingUpgrade(ctx);
     if (s2 === 'startCrafting')         return startCrafting(ctx);

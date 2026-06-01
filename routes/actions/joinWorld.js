@@ -3,7 +3,7 @@
  */
 
 import { incrementPlayerCount, getPlayerWorldData, setPlayerWorldData } from '../../db/players.js';
-import { foundHouseForPlayer, joinHouseForPlayer } from '../../db/houses.js';
+import { foundHouseForPlayer, requestToJoinHouse } from '../../db/houses.js';
 
 export async function joinWorld({ uid, data, db }) {
   const { worldId, race, displayName, houseName, houseId, spawnPosition } = data;
@@ -13,11 +13,9 @@ export async function joinWorld({ uid, data, db }) {
   if (displayName && (displayName.length < 2 || displayName.length > 20)) {
     throw err(400, 'displayName must be between 2 and 20 characters');
   }
-  // Every player must belong to a house: either join an existing one (houseId)
-  // or found a new one (houseName).
-  if (!houseId && !(houseName && houseName.trim())) {
-    throw err(400, 'a house is required: provide houseId or houseName');
-  }
+  // A house is OPTIONAL. A player may join with none, found a new one
+  // (houseName, immediate), or request to join an existing one (houseId,
+  // pending the founder's approval).
   if (houseName && houseName.trim().length > 24) {
     throw err(400, 'houseName must be 24 characters or fewer');
   }
@@ -40,16 +38,27 @@ export async function joinWorld({ uid, data, db }) {
     lastLocation: { x: coordinates.x, y: coordinates.y, timestamp: Date.now() }
   });
 
-  // Place the player in a house. The house's members[] is the source of truth;
-  // the player's house is resolved from it on read, not stored on the player.
+  // Resolve the requested house relationship. Founding is immediate; joining an
+  // existing house only records a request (see requestToJoinHouse). With neither
+  // provided, the player simply has no house.
   const name = (displayName || '').trim();
-  const house = houseId
-    ? await joinHouseForPlayer(db, worldId, uid, name, houseId)
-    : await foundHouseForPlayer(db, worldId, uid, name, houseName.trim());
+  let house = null;
+  let requested = false;
+  if (houseName && houseName.trim()) {
+    house = await foundHouseForPlayer(db, worldId, uid, name, houseName.trim());
+  } else if (houseId) {
+    await requestToJoinHouse(db, worldId, uid, name, houseId);
+    requested = true;
+  }
 
   if (isNewPlayer) await incrementPlayerCount(db, worldId);
 
-  return { success: true, worldId, coordinates, isNewPlayer, houseId: house._id.toString(), houseName: house.name };
+  return {
+    success: true, worldId, coordinates, isNewPlayer,
+    houseId:   house ? house._id.toString() : null,
+    houseName: house ? house.name : null,
+    requestedHouseId: requested ? houseId : null,
+  };
 }
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }
