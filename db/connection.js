@@ -25,6 +25,7 @@ async function _ensureIndexes(db) {
   await db.collection('users').createIndex({ email: 1 }, { unique: true, sparse: true });
   await db.collection('reports').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await db.collection('reports').createIndex({ worldId: 1, playerId: 1, timestamp: -1 });
+  await db.collection('magic_links').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await db.collection('tribes').createIndex({ worldId: 1 });
   await db.collection('tribes').createIndex({ worldId: 1, 'members.uid': 1 });
 }

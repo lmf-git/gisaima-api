@@ -7,11 +7,13 @@
 
 import { createHmac, randomBytes, scrypt as scryptSync, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { sendMail } from './mail.js';
 
 const scrpt = promisify(scryptSync);
 
 const JWT_SECRET     = process.env.JWT_SECRET     || 'change-me-in-production';
 const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // passwordless sign-in link validity
 
 // ---------------------------------------------------------------------------
 // Password helpers (scrypt — safe, no external deps)
@@ -140,7 +142,10 @@ export async function handleRegister(db, _req, body) {
     });
   }
 
-  return { token: issueToken(uid, false), uid, isGuest: false };
+  return {
+    token: issueToken(uid, false), uid, isGuest: false,
+    email, displayName: displayName || email.split('@')[0]
+  };
 }
 
 /** POST /auth/login */
@@ -157,6 +162,9 @@ export async function handleLogin(db, _req, body) {
   return { token: issueToken(user._id, false), uid: user._id, isGuest: false, displayName: user.displayName };
 }
 
+/** UTC calendar-day stamp, e.g. '2026-06-02'. */
+function _dayStamp(d) { return new Date(d).toISOString().slice(0, 10); }
+
 /** GET /auth/me */
 export async function handleMe(db, req) {
   const auth = getAuth(req);
@@ -167,7 +175,131 @@ export async function handleMe(db, req) {
   );
   if (!user) throw apiError(404, 'user not found');
   const { _id, ...rest } = user;
-  return { uid: _id, ...rest };
+
+  // Nudge guests to convert to a real account once per calendar day they return.
+  // `lastConversionPrompt` on the user doc is the durable record (survives any
+  // localStorage loss); we stamp it the first time /auth/me is hit on a new day.
+  let promptConversion = false;
+  if (user.isGuest) {
+    const last = user.lastConversionPrompt ? _dayStamp(user.lastConversionPrompt) : null;
+    if (last !== _dayStamp(Date.now())) {
+      promptConversion = true;
+      await db.collection('users').updateOne(
+        { _id }, { $set: { lastConversionPrompt: new Date() } }
+      );
+    }
+  }
+
+  return { uid: _id, ...rest, promptConversion };
+}
+
+// ---------------------------------------------------------------------------
+// Passwordless email sign-in (magic link)
+// ---------------------------------------------------------------------------
+
+function _normEmail(e) { return String(e || '').trim().toLowerCase(); }
+function _validEmail(e) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e); }
+
+/**
+ * POST /auth/email/request — issue a one-time sign-in link and email it.
+ *
+ * Works for sign-up, log-in, AND guest conversion (pass `guestToken`): the same
+ * email may map to at most one account, so a guest converting to an
+ * already-registered email is rejected up front. We always 200 on a valid email
+ * shape so the endpoint can't be used to probe which addresses exist (except the
+ * deliberate conflict signal during conversion, which is the caller's own data).
+ */
+export async function requestEmailLogin(db, req, body) {
+  const email = _normEmail(body.email);
+  if (!_validEmail(email)) throw apiError(400, 'a valid email is required');
+
+  let purpose  = 'login';
+  let guestUid = null;
+  if (body.guestToken) {
+    const guest = verifyToken(body.guestToken);
+    if (!guest?.isGuest) throw apiError(400, 'invalid guest token');
+    guestUid = guest.uid;
+    purpose  = 'convert';
+  }
+
+  if (purpose === 'convert') {
+    const clash = await db.collection('users').findOne({ email });
+    if (clash && clash._id !== guestUid) throw apiError(409, 'that email is already registered');
+  }
+
+  const token = randomBytes(32).toString('hex');
+  await db.collection('magic_links').insertOne({
+    _id: token, email, purpose, guestUid,
+    createdAt: new Date(), expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS),
+  });
+
+  // Link points at the WEB app (the browser origin that called us), not the API.
+  const base = process.env.APP_BASE_URL || req.headers?.origin || '';
+  const link = `${base}/login/verify?token=${token}`;
+  try {
+    await sendMail({
+      to: email,
+      subject: 'Your Gisaima sign-in link',
+      text: `Sign in to Gisaima:\n\n${link}\n\nThis link expires in 15 minutes. `
+          + `If you didn't request it, you can safely ignore this email.`,
+      html: `<p>Sign in to Gisaima:</p>`
+          + `<p><a href="${link}">Sign in</a></p>`
+          + `<p style="color:#888;font-size:13px">This link expires in 15 minutes. `
+          + `If you didn't request it, you can safely ignore this email.</p>`,
+    });
+  } catch (err) {
+    console.error('[auth] magic-link email failed:', err.message);
+    throw apiError(502, 'could not send the sign-in email — please try again');
+  }
+
+  return { success: true };
+}
+
+/**
+ * POST /auth/email/verify — consume a sign-in link and return an auth token.
+ * Single-use: the link record is deleted before anything else. Creates the
+ * account on first sign-in, upgrades the guest in place on conversion.
+ */
+export async function verifyEmailLogin(db, _req, body) {
+  const token = String(body.token || '');
+  if (!token) throw apiError(400, 'token required');
+
+  const rec = await db.collection('magic_links').findOne({ _id: token });
+  if (!rec) throw apiError(400, 'this sign-in link is invalid or has already been used');
+  await db.collection('magic_links').deleteOne({ _id: token });        // single use
+  if (rec.expiresAt && new Date(rec.expiresAt).getTime() < Date.now()) {
+    throw apiError(400, 'this sign-in link has expired — request a new one');
+  }
+
+  const email = rec.email;
+  let uid, displayName;
+
+  if (rec.purpose === 'convert' && rec.guestUid) {
+    const clash = await db.collection('users').findOne({ email });
+    if (clash && clash._id !== rec.guestUid) throw apiError(409, 'that email is already registered');
+    const guest = await db.collection('users').findOne({ _id: rec.guestUid });
+    uid = rec.guestUid;
+    displayName = guest?.displayName || email.split('@')[0];
+    await db.collection('users').updateOne(
+      { _id: uid },
+      { $set: { email, isGuest: false, passwordless: true, displayName } }
+    );
+  } else {
+    const existing = await db.collection('users').findOne({ email });
+    if (existing) {
+      uid = existing._id;
+      displayName = existing.displayName || email.split('@')[0];
+      if (existing.isGuest) await db.collection('users').updateOne({ _id: uid }, { $set: { isGuest: false } });
+    } else {
+      uid = `user_${randomBytes(8).toString('hex')}`;
+      displayName = email.split('@')[0];
+      await db.collection('users').insertOne({
+        _id: uid, email, displayName, isGuest: false, passwordless: true, created: Date.now(),
+      });
+    }
+  }
+
+  return { token: issueToken(uid, false), uid, isGuest: false, email, displayName };
 }
 
 // ---------------------------------------------------------------------------

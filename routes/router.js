@@ -1,4 +1,5 @@
 import { handleGuestLogin, handleRegister, handleLogin, handleMe,
+         requestEmailLogin, verifyEmailLogin,
          getAuth, apiError } from '../core/auth.js';
 import { getWorlds, getWorld, getChunk, getWorldChat } from './worlds.js';
 import { getPlayerWorlds, getPlayerWorldState }         from './players.js';
@@ -62,6 +63,8 @@ export async function route(db, req, body) {
   if (method === 'POST' && p === '/auth/guest')    return handleGuestLogin(db, req, body);
   if (method === 'POST' && p === '/auth/register') return handleRegister(db, req, body);
   if (method === 'POST' && p === '/auth/login')    return handleLogin(db, req, body);
+  if (method === 'POST' && p === '/auth/email/request') return requestEmailLogin(db, req, body);
+  if (method === 'POST' && p === '/auth/email/verify')  return verifyEmailLogin(db, req, body);
   if (method === 'GET'  && p === '/auth/me')       return handleMe(db, req);
 
   // ── Public world reads ────────────────────────────────────────────────────

@@ -284,8 +284,8 @@ async function processWorld(db, worldId, worldData, now) {
     const cleanupOps = new Ops();
     const r = await tickCleanup(db, worldId, chunks, cleanupOps, worldInfo);
     await cleanupOps.flush(db);
-    if (r.degraded || r.ruined || r.removedGroups || r.removedStructures || r.removedPlayers) {
-      console.log(`[tick] ${worldId} cleanup: degraded=${r.degraded} ruined=${r.ruined} groups=${r.removedGroups} structs=${r.removedStructures} players=${r.removedPlayers}`);
+    if (r.degraded || r.ruined || r.removedGroups || r.removedStructures || r.removedPlayers || r.removedAccounts) {
+      console.log(`[tick] ${worldId} cleanup: degraded=${r.degraded} ruined=${r.ruined} groups=${r.removedGroups} structs=${r.removedStructures} players=${r.removedPlayers} guestAccounts=${r.removedAccounts}`);
     }
   } catch (err) {
     console.error(`[tick] cleanup ${worldId}:`, err);
