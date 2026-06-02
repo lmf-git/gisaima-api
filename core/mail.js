@@ -1,51 +1,61 @@
 /**
- * Outbound email via Mailgun's HTTP API (no SMTP, no extra deps — uses the
- * global fetch in Node 18+). Configured through the Heroku Mailgun addon's
- * env vars:
+ * Outbound email via Mailtrap SMTP (nodemailer). The Heroku Mailtrap addon
+ * provisions SMTP credentials — the management/API token it also exposes is NOT
+ * accepted by Mailtrap's HTTP send API, so SMTP is the reliable path.
  *
- *   MAILGUN_API_KEY   — addon-provided private API key
- *   MAILGUN_DOMAIN    — addon-provided sending domain
- *   EMAIL_FROM        — optional "Name <addr>" override (defaults to postmaster@domain)
- *   MAILGUN_API_BASE  — optional region base (EU: https://api.eu.mailgun.net)
+ * Env vars (the Heroku addon sets the SMTP ones; sandbox shown as defaults):
  *
- * If Mailgun isn't configured (e.g. local dev), we log what we *would* have
- * sent and return without throwing, so flows stay testable without a provider.
+ *   MAILTRAP_SMTP_HOST — SMTP host (default sandbox.smtp.mailtrap.io)
+ *   MAILTRAP_SMTP_PORT — 465 (TLS), or 587 / 2525 (STARTTLS). Default 2525.
+ *   MAILTRAP_SMTP_USER — SMTP username (required)
+ *   MAILTRAP_SMTP_PASS — SMTP password (required)
+ *   EMAIL_FROM         — optional "Name <addr>" (or bare "addr") sender.
+ *                        For live sending the address must be on a domain you've
+ *                        verified in Mailtrap; the sandbox accepts anything.
+ *
+ * If no SMTP credentials are configured (e.g. local dev) we log what we *would*
+ * have sent and return without throwing, so flows stay testable.
  */
 
-const MAILGUN_API_KEY  = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN   = process.env.MAILGUN_DOMAIN;
-const MAILGUN_API_BASE = process.env.MAILGUN_API_BASE || 'https://api.mailgun.net';
-const EMAIL_FROM       = process.env.EMAIL_FROM
-  || (MAILGUN_DOMAIN ? `Gisaima <postmaster@${MAILGUN_DOMAIN}>` : 'Gisaima <no-reply@localhost>');
+import nodemailer from 'nodemailer';
+
+const SMTP_HOST = process.env.MAILTRAP_SMTP_HOST || 'sandbox.smtp.mailtrap.io';
+const SMTP_PORT = Number(process.env.MAILTRAP_SMTP_PORT || 2525);
+const SMTP_USER = process.env.MAILTRAP_SMTP_USER;
+const SMTP_PASS = process.env.MAILTRAP_SMTP_PASS;
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Gisaima <hello@demomailtrap.co>';
 
 export function mailConfigured() {
-  return !!(MAILGUN_API_KEY && MAILGUN_DOMAIN);
+  return !!(SMTP_USER && SMTP_PASS);
+}
+
+// Lazily build a single reusable transport so we don't open a connection (or
+// throw on missing creds) at import time.
+let _transport;
+function _getTransport() {
+  if (!_transport) {
+    _transport = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,      // 465 = implicit TLS; 587/2525 = STARTTLS
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    });
+  }
+  return _transport;
 }
 
 export async function sendMail({ to, subject, text, html }) {
   if (!mailConfigured()) {
-    console.warn(`[mail] Mailgun not configured — would send to ${to}: "${subject}"\n${text || html || ''}`);
+    console.warn(`[mail] Mailtrap SMTP not configured — would send to ${to}: "${subject}"\n${text || html || ''}`);
     return { delivered: false, devLogged: true };
   }
 
-  const form = new URLSearchParams();
-  form.set('from', EMAIL_FROM);
-  form.set('to', to);
-  form.set('subject', subject);
-  if (text) form.set('text', text);
-  if (html) form.set('html', html);
-
-  const res = await fetch(`${MAILGUN_API_BASE}/v3/${MAILGUN_DOMAIN}/messages`, {
-    method: 'POST',
-    headers: {
-      Authorization: 'Basic ' + Buffer.from(`api:${MAILGUN_API_KEY}`).toString('base64'),
-    },
-    body: form,
+  const info = await _getTransport().sendMail({
+    from: EMAIL_FROM,
+    to,
+    subject,
+    ...(text ? { text } : {}),
+    ...(html ? { html } : {}),
   });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`mailgun send failed (${res.status}): ${detail}`);
-  }
-  return { delivered: true };
+  return { delivered: true, messageId: info.messageId };
 }
