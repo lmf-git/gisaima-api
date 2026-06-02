@@ -138,13 +138,13 @@ function getUpgradeRequirements(structureType, currentLevel) {
   if (structureType === 'watchtower') resources.push({ code: 'ROPE', quantity: Math.floor(3 * m) });
   if (structureType === 'citadel') {
     resources.push({ code: 'METAL_ORE', quantity: Math.floor(8 * m) });
-    resources.push({ code: 'GOLD_ORE', quantity: Math.floor(3 * m) });
+    resources.push({ code: 'CRYSTAL', quantity: Math.floor(3 * m) });
   }
   if (structureType === 'spawn') {
     resources.forEach(r => { r.quantity = Math.floor(r.quantity * 1.5); });
-    resources.push({ code: 'CRYSTAL_SHARD', quantity: currentLevel });
+    resources.push({ code: 'CRYSTAL', quantity: currentLevel });
   }
-  if (currentLevel >= 3) resources.push({ code: 'CRYSTAL_SHARD', quantity: currentLevel - 2 });
+  if (currentLevel >= 3) resources.push({ code: 'CRYSTAL', quantity: currentLevel - 2 });
   return resources;
 }
 

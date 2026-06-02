@@ -5,6 +5,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { STRUCTURES } from 'gisaima-shared/definitions/STRUCTURES.js';
 import { ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
+import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { Ops } from '../../lib/ops.js';
 
 export async function buildStructure({ uid, data, db }) {
@@ -23,6 +24,19 @@ export async function buildStructure({ uid, data, db }) {
   const chunkDoc = await db.collection('chunks').findOne({ worldId, chunkKey });
   const tile     = chunkDoc?.tiles?.[tileKey] || {};
   const group    = tile.groups?.[groupId];
+
+  // Structures cannot be founded on water — harbours are buildings raised on
+  // land that borders water, not standalone structures on the water itself.
+  const worldDoc = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
+  const seed     = worldDoc?.info?.seed;
+  if (seed !== undefined && seed !== null && seed !== '') {
+    try {
+      const terrain = new TerrainGenerator(seed, 10_000).getTerrainData(tileX, tileY);
+      if (terrain?.water) throw err(409, 'Structures cannot be built on water.');
+    } catch (e) {
+      if (e.status) throw e; // re-throw the water rejection; ignore terrain glitches
+    }
+  }
 
   if (tile.structure)          throw err(409, 'There is already a structure at this location.');
   if (!group)                  throw err(404, 'Group not found at this location.');

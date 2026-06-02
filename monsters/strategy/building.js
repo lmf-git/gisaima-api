@@ -286,7 +286,7 @@ function hasResourcesToUpgrade(monsterGroup, structure) {
   }
   
   if (currentLevel >= 3) {
-    requiredResources.push({ name: 'CRYSTAL_SHARD', quantity: 1 });
+    requiredResources.push({ name: 'CRYSTAL', quantity: 1 });
   }
   
   return hasSufficientResources(monsterGroup.items, requiredResources);

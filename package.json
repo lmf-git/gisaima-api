@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "dotenv": "^17.4.1",
-    "gisaima-shared": "lmf-git/gisaima-v3-shared#bf4f7a8bdaaf896b77c5f48ae75797d2b8fcf6c7",
+    "gisaima-shared": "lmf-git/gisaima-v3-shared#34e20c5d7282d3c9545c34034b55d223806e32b0",
     "mongodb": "^6.0.0",
     "ws": "^8.0.0"
   },
