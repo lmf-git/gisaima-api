@@ -4,7 +4,6 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
-import { addDistance } from '../db/stats.js';
 import { deliver as deliverCaravan } from '../db/caravans.js';
 import { patchLife } from '../db/lives.js';
 import { invalidate as invalidateVisibility } from '../lib/visibility.js';
@@ -134,13 +133,12 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
     // Track distance travelled + last-known location for player-owned groups.
     // Drives wealth/distance rankings, treasure-trail proximity solves,
     // and the per-character chronicle.
-    if (_db && group.type !== 'monster' && group.owner) {
-      addDistance(_db, worldId, group.owner, 1).catch(() => {});
-      _db.collection('players').updateOne(
-        { _id: group.owner },
-        { $set: { [`worlds.${worldId}.lastLocation`]: { x: nextPoint.x, y: nextPoint.y } } },
-        { upsert: true }
-      ).catch(() => {});
+    if (group.type !== 'monster' && group.owner) {
+      // Batch the distance increment + lastLocation update through Ops so they
+      // collapse into this player's single flush write instead of firing one
+      // round-trip per moving group every tick.
+      ops.playerInc(group.owner, worldId, 'distance', 1);
+      ops.player(group.owner, worldId, 'lastLocation', { x: nextPoint.x, y: nextPoint.y });
 
       // A player-owned group is a sight source — its move changes what the owner
       // can see. Force the visibility cache to rebuild so chunk fetches before the

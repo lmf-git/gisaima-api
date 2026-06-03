@@ -17,16 +17,26 @@ export async function getAllWorldIds(db) {
  * Loads all worlds and assembles the same nested object shape the Firebase
  * tick code expects:
  *   { worldId: { info, upgrades, crafting, chunks: { chunkKey: { tileKey: tileData } }, chat: { msgId: msg } } }
+ *
+ * By default only chunks flagged `active` (or with no flag yet — legacy/new
+ * docs) are loaded, so inert explored terrain costs nothing per tick. Pass
+ * `{ activeOnly: false }` for the periodic full sweep that reconciles flags.
  */
-export async function loadAllWorlds(db) {
+export async function loadAllWorlds(db, { activeOnly = true } = {}) {
   const worldDocs = await db.collection('worlds').find({}).toArray();
   const result = {};
+
+  // `active: { $ne: false }` matches active:true AND docs missing the field,
+  // so a chunk is only ever skipped once the tick has explicitly demoted it.
+  const chunkFilter = activeOnly
+    ? (worldId) => ({ worldId, active: { $ne: false } })
+    : (worldId) => ({ worldId });
 
   await Promise.all(worldDocs.map(async world => {
     const worldId = world._id;
 
     const [chunkDocs, chatDocs] = await Promise.all([
-      db.collection('chunks').find({ worldId }).toArray(),
+      db.collection('chunks').find(chunkFilter(worldId)).toArray(),
       db.collection('chat').find({ worldId }).sort({ timestamp: 1 }).toArray()
     ]);
 

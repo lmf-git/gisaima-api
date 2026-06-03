@@ -5,6 +5,7 @@
 
 import { getDb } from '../db/connection.js';
 import { loadAllWorlds } from '../db/worlds.js';
+import { hasLiveWork } from '../db/chunks.js';
 import { Ops } from '../lib/ops.js';
 import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
@@ -34,6 +35,18 @@ import { processStructureProduction }     from '../events/structureProductionTic
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_CHAT_HISTORY = 500;
+
+// Every Nth run, load *all* chunks (not just active ones) so the reconcile pass
+// can demote chunks that fell idle without the tick touching them (e.g. a player
+// route emptied a tile between ticks). Between sweeps, demotion still happens for
+// any chunk the tick itself changed, so this is only a slow-drift backstop.
+const FULL_SWEEP_EVERY = 30;
+
+// Skip a tick rather than overlap if the previous one overran the interval —
+// setInterval does not await the async body, so without this guard a slow world
+// could pile concurrent ticks on top of each other.
+let _ticking  = false;
+let _runCount = 0;
 
 // Walk the in-memory chunks once to count monster population. Growth in these
 // numbers over a long-running world is the prime suspect for tick slowdown,
@@ -70,26 +83,35 @@ export function startTick() {
 }
 
 async function runTick() {
-  const db  = getDb();
-  const now = Date.now();
-  console.log(`[tick] ${new Date(now).toISOString()}`);
-
-  const worlds = await loadAllWorlds(db);
-  if (!worlds || !Object.keys(worlds).length) {
-    console.log('[tick] no worlds');
+  if (_ticking) {
+    console.warn('[tick] previous tick still running — skipping this interval');
     return;
   }
+  _ticking = true;
+  try {
+    const db        = getDb();
+    const now       = Date.now();
+    const fullSweep = (_runCount++ % FULL_SWEEP_EVERY) === 0;
+    console.log(`[tick] ${new Date(now).toISOString()}${fullSweep ? ' (full sweep)' : ''}`);
 
-  for (const worldId in worlds) {
-    try {
-      await processWorld(db, worldId, worlds[worldId], now);
-    } catch (err) {
-      console.error(`[tick] world ${worldId} error:`, err);
+    const worlds = await loadAllWorlds(db, { activeOnly: !fullSweep });
+    if (!worlds || !Object.keys(worlds).length) {
+      console.log('[tick] no worlds');
+      return;
     }
+
+    // Worlds are independent — process them concurrently so overall tick latency
+    // is the slowest world, not the sum of all of them.
+    await Promise.all(Object.keys(worlds).map(worldId =>
+      processWorld(db, worldId, worlds[worldId], now, fullSweep)
+        .catch(err => console.error(`[tick] world ${worldId} error:`, err))
+    ));
+  } finally {
+    _ticking = false;
   }
 }
 
-async function processWorld(db, worldId, worldData, now) {
+async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   const worldInfo = worldData?.info || {};
   if (worldInfo.seed === undefined || worldInfo.seed === null || worldInfo.seed === '') {
     console.error(`[tick] world ${worldId} skipped: info.seed is missing (re-seed/restore this world)`);
@@ -225,8 +247,9 @@ async function processWorld(db, worldId, worldData, now) {
   await refreshIfStale(db, worldId, 0);
   mark('visibility');
 
-  // Broadcast updated chunks to WebSocket clients
-  await broadcastChangedChunks(db, worldId, ops);
+  // Broadcast updated chunks to WebSocket clients, and reconcile the `active`
+  // flag from post-flush state (this is where idle chunks get demoted).
+  await broadcastAndReconcile(db, worldId, ops, chunks, fullSweep);
   mark('broadcast');
 
   // --- Async processors (use worldData already loaded) ---
@@ -322,19 +345,62 @@ async function processWorld(db, worldId, worldData, now) {
     .sort((a, b) => b[1] - a[1])
     .map(([label, ms]) => `${label}=${ms}ms`)
     .join(' ');
-  const m = censusMonsters(chunks);
   console.log(`[tick] ${worldId} timing ${total}ms · ${breakdown}`);
-  console.log(`[tick] ${worldId} census · monsterGroups=${m.groups} monsterUnits=${m.units} ` +
-              `monsterStructs=${m.structures} | totalGroups=${m.totalGroups} tiles=${m.totalTiles}`);
+  if (total > TICK_INTERVAL_MS * 0.8) {
+    console.warn(`[tick] ${worldId} SLOW: ${total}ms is >80% of the ${TICK_INTERVAL_MS}ms interval — ` +
+                 `worst phase ${Object.entries(timings).sort((a, b) => b[1] - a[1])[0]?.join('=')}`);
+  }
+  // Census walks every tile, so only run it on full-sweep ticks (when every
+  // chunk is already loaded anyway) — it is diagnostics, not game logic.
+  if (fullSweep) {
+    const m = censusMonsters(chunks);
+    console.log(`[tick] ${worldId} census · monsterGroups=${m.groups} monsterUnits=${m.units} ` +
+                `monsterStructs=${m.structures} | totalGroups=${m.totalGroups} tiles=${m.totalTiles}`);
+  }
 }
 
-async function broadcastChangedChunks(db, worldId, ops) {
+// Broadcast chunks mutated this tick and reconcile their `active` flag from the
+// authoritative post-flush state. A single $in read replaces the old N+1 of one
+// findOne per changed chunk. Demotion (active:false) lives here because this is
+// the only place we hold true whole-chunk state after writes have landed.
+//
+// On a full sweep every loaded chunk is checked for demotion (catches chunks
+// that fell idle via a player route without the tick touching them); normal
+// ticks only check the chunks they changed.
+async function broadcastAndReconcile(db, worldId, ops, chunks, fullSweep) {
   const changedChunks = new Set();
   for (const { worldId: wId, chunkKey } of ops._chunks.values()) {
     if (wId === worldId) changedChunks.add(chunkKey);
   }
-  for (const chunkKey of changedChunks) {
-    const doc = await db.collection('chunks').findOne({ worldId, chunkKey });
-    if (doc) broadcastChunkUpdate(worldId, chunkKey, doc.tiles || {});
+
+  // Fetch fresh post-flush state for changed chunks in one round-trip.
+  const freshTiles = new Map(); // chunkKey → tiles
+  if (changedChunks.size) {
+    const docs = await db.collection('chunks')
+      .find({ worldId, chunkKey: { $in: [...changedChunks] } })
+      .toArray();
+    for (const doc of docs) {
+      const tiles = doc.tiles || {};
+      freshTiles.set(doc.chunkKey, tiles);
+      broadcastChunkUpdate(worldId, doc.chunkKey, tiles);
+    }
   }
+
+  // Demote chunks that are now idle. Changed chunks use the fresh read; on a
+  // full sweep, unchanged chunks use the in-memory state we loaded (which equals
+  // their DB state, since nothing wrote to them this tick).
+  const demote = [];
+  const consider = fullSweep ? new Set([...Object.keys(chunks), ...changedChunks]) : changedChunks;
+  for (const chunkKey of consider) {
+    const tiles = freshTiles.get(chunkKey) ?? chunks[chunkKey];
+    if (!hasLiveWork(tiles)) {
+      demote.push({
+        updateOne: {
+          filter: { worldId, chunkKey },
+          update: { $set: { active: false } }
+        }
+      });
+    }
+  }
+  if (demote.length) await db.collection('chunks').bulkWrite(demote, { ordered: false });
 }

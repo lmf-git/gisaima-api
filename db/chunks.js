@@ -1,3 +1,21 @@
+/**
+ * Whether a chunk needs ticking: it hosts at least one tile with unit/monster
+ * groups, an active battle, or a structure. Mirrors the `WORK_PATH` promotion
+ * rule in lib/ops.js — keep the two in sync. Chunks of pure explored terrain
+ * (no groups/battles/structures) are inert and can be skipped each tick.
+ */
+export function hasLiveWork(tiles) {
+  if (!tiles) return false;
+  for (const tileKey in tiles) {
+    const t = tiles[tileKey];
+    if (!t) continue;
+    if (t.structure) return true;
+    if (t.battles && Object.keys(t.battles).length) return true;
+    if (t.groups && Object.keys(t.groups).length) return true;
+  }
+  return false;
+}
+
 export async function getChunkDoc(db, worldId, chunkKey) {
   return db.collection('chunks').findOne({ worldId, chunkKey });
 }
