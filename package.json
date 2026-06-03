@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
+  "engines": {
+    "node": "22.x",
+    "yarn": "4.x"
+  },
   "scripts": {
     "start": "node --preserve-symlinks index.js",
     "dev": "node --preserve-symlinks --watch index.js",

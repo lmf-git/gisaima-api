@@ -1,8 +1,9 @@
 import {
   getWorldTribes, getPlayerTribe, createTribe,
   addMemberToTribe, removeMemberFromTribe, deleteTribe,
-  getTribeById, getRankings,
+  getTribeById,
 } from '../db/tribes.js';
+import { getRankings } from '../db/rankings.js';
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }
 
