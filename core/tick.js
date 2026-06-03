@@ -5,11 +5,12 @@
 
 import { getDb } from '../db/connection.js';
 import { loadAllWorlds } from '../db/worlds.js';
-import { hasLiveWork } from '../db/chunks.js';
+import { hasLiveWork, hasAnyContent, isTileHusk } from '../db/chunks.js';
+import { recordWorldTick, recordRun, storageReport } from './metrics.js';
 import { Ops } from '../lib/ops.js';
 import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
-import { updateWorldVisibility, refreshIfStale } from '../lib/visibility.js';
+import { refreshIfStale } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 
 import { mergeWorldMonsterGroups, monsterSpawnTick, spawnMonsters } from '../events/monsterSpawnTick.js';
@@ -33,7 +34,13 @@ import { tick as tickCleanup }            from '../db/cleanup.js';
 import { tick as tickMonsterPopulation }  from '../db/monsterCleanup.js';
 import { processStructureProduction }     from '../events/structureProductionTick.js';
 
-const TICK_INTERVAL_MS = 60_000;
+// Target spacing between tick *starts*. The tick self-schedules (see startTick)
+// and adapts: a tick that runs long pushes the next one out rather than stacking,
+// and we always leave at least TICK_MIN_GAP_MS idle for HTTP/WS to breathe on the
+// shared dyno. In-world time is driven by tickCount, so a slightly variable real
+// interval is fine. Both are env-overridable.
+const TICK_INTERVAL_MS = Number(process.env.TICK_INTERVAL_MS) || 60_000;
+const TICK_MIN_GAP_MS  = Number(process.env.TICK_MIN_GAP_MS)  || 5_000;
 const MAX_CHAT_HISTORY = 500;
 
 // Every Nth run, load *all* chunks (not just active ones) so the reconcile pass
@@ -42,9 +49,7 @@ const MAX_CHAT_HISTORY = 500;
 // any chunk the tick itself changed, so this is only a slow-drift backstop.
 const FULL_SWEEP_EVERY = 30;
 
-// Skip a tick rather than overlap if the previous one overran the interval —
-// setInterval does not await the async body, so without this guard a slow world
-// could pile concurrent ticks on top of each other.
+// Guard against overlap if a tick somehow runs past its own scheduling.
 let _ticking  = false;
 let _runCount = 0;
 
@@ -74,12 +79,43 @@ function censusMonsters(chunks) {
   return { groups, units, structures, totalGroups, totalTiles };
 }
 
+let _timeoutId = null;
+let _stopped   = false;
+
 export function startTick() {
-  console.log('Game tick scheduler started');
-  runTick().catch(err => console.error('Tick error:', err));
-  setInterval(() => {
-    runTick().catch(err => console.error('Tick error:', err));
-  }, TICK_INTERVAL_MS);
+  console.log(`Game tick scheduler started (target ${TICK_INTERVAL_MS}ms, min gap ${TICK_MIN_GAP_MS}ms)`);
+  _stopped = false;
+  _scheduleNext(0);
+}
+
+// Self-scheduling loop: run a tick, then schedule the next so starts are ~target
+// apart when ticks are fast, but a long tick just delays the next one (back-off)
+// while still guaranteeing TICK_MIN_GAP_MS of idle for request handling.
+function _scheduleNext(delay) {
+  if (_stopped) return;
+  _timeoutId = setTimeout(async () => {
+    const started = Date.now();
+    try { await runTick(); } catch (err) { console.error('Tick error:', err); }
+    const elapsed = Date.now() - started;
+    const next = Math.max(TICK_MIN_GAP_MS, TICK_INTERVAL_MS - elapsed);
+    if (elapsed > TICK_INTERVAL_MS) {
+      console.warn(`[tick] overran target (${elapsed}ms > ${TICK_INTERVAL_MS}ms) — next in ${next}ms`);
+    }
+    _scheduleNext(next);
+  }, delay);
+}
+
+/**
+ * Stop scheduling new ticks and wait (briefly) for an in-flight tick to finish,
+ * so a Heroku dyno cycle (SIGTERM) doesn't kill the process mid-write.
+ */
+export async function stopTick({ drainMs = 8000 } = {}) {
+  _stopped = true;
+  if (_timeoutId) { clearTimeout(_timeoutId); _timeoutId = null; }
+  const deadline = Date.now() + drainMs;
+  while (_ticking && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 100));
+  }
 }
 
 async function runTick() {
@@ -88,9 +124,10 @@ async function runTick() {
     return;
   }
   _ticking = true;
+  const runStart = Date.now();
   try {
     const db        = getDb();
-    const now       = Date.now();
+    const now       = runStart;
     const fullSweep = (_runCount++ % FULL_SWEEP_EVERY) === 0;
     console.log(`[tick] ${new Date(now).toISOString()}${fullSweep ? ' (full sweep)' : ''}`);
 
@@ -106,8 +143,19 @@ async function runTick() {
       processWorld(db, worldId, worlds[worldId], now, fullSweep)
         .catch(err => console.error(`[tick] world ${worldId} error:`, err))
     ));
+
+    // Log the storage trend once per full sweep (~every 30 min) so it shows up
+    // in Heroku logs without polling /metrics. The 512MB M0 cap is the wall.
+    if (fullSweep) {
+      const s = await storageReport(db);
+      if (!s.error) {
+        console.log(`[tick] storage ${s.storageMB}MB / ${s.capMB}MB (${s.usedPct}%) · data ${s.dataMB}MB · index ${s.indexMB}MB`);
+      }
+    }
   } finally {
     _ticking = false;
+    const totalMs = Date.now() - runStart;
+    recordRun({ totalMs, slow: totalMs > TICK_INTERVAL_MS });
   }
 }
 
@@ -139,22 +187,11 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   const chunks = worldData.chunks || {};
   if (!Object.keys(chunks).length) return;
 
-  // Pull morality scores so the beacon visibility extension can downgrade
-  // privacy for low-morality players (bad acts → wider visibility).
-  const moralityByUid = {};
-  try {
-    const playerDocs = await db.collection('players')
-      .find({ [`worlds.${worldId}.morality`]: { $exists: true } },
-            { projection: { _id: 1, [`worlds.${worldId}.morality.score`]: 1 } })
-      .toArray();
-    for (const p of playerDocs) {
-      const s = p.worlds?.[worldId]?.morality?.score;
-      if (typeof s === 'number') moralityByUid[p._id] = s;
-    }
-  } catch (err) {
-    console.error(`[tick] morality fetch ${worldId}:`, err);
-  }
-  updateWorldVisibility(worldId, chunks, moralityByUid);
+  // Visibility is (re)built post-flush by refreshIfStale(0) below, which is the
+  // copy every broadcast in this tick actually reads; concurrent chunk requests
+  // keep it fresh on their own path. So we deliberately do NOT build it here from
+  // start-of-tick state — that would be an immediately-stale extra morality query
+  // and visibility pass per world, per tick.
 
   const ops = new Ops();
   const processedGroups = new Set();
@@ -249,7 +286,7 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
 
   // Broadcast updated chunks to WebSocket clients, and reconcile the `active`
   // flag from post-flush state (this is where idle chunks get demoted).
-  await broadcastAndReconcile(db, worldId, ops, chunks, fullSweep);
+  const reclaim = await broadcastAndReconcile(db, worldId, ops, chunks, fullSweep);
   mark('broadcast');
 
   // --- Async processors (use worldData already loaded) ---
@@ -346,6 +383,12 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
     .map(([label, ms]) => `${label}=${ms}ms`)
     .join(' ');
   console.log(`[tick] ${worldId} timing ${total}ms · ${breakdown}`);
+  recordWorldTick(worldId, {
+    durationMs:   total,
+    activeChunks: Object.keys(chunks).length,
+    deleted:      reclaim?.deleted || 0,
+    pruned:       reclaim?.pruned  || 0,
+  });
   if (total > TICK_INTERVAL_MS * 0.8) {
     console.warn(`[tick] ${worldId} SLOW: ${total}ms is >80% of the ${TICK_INTERVAL_MS}ms interval — ` +
                  `worst phase ${Object.entries(timings).sort((a, b) => b[1] - a[1])[0]?.join('=')}`);
@@ -386,21 +429,44 @@ async function broadcastAndReconcile(db, worldId, ops, chunks, fullSweep) {
     }
   }
 
-  // Demote chunks that are now idle. Changed chunks use the fresh read; on a
-  // full sweep, unchanged chunks use the in-memory state we loaded (which equals
-  // their DB state, since nothing wrote to them this tick).
-  const demote = [];
+  // Reconcile each chunk from authoritative post-flush state. Three outcomes:
+  //   • no content at all  → delete the doc (pure terrain, regenerates from the
+  //     world seed on next visit) to reclaim free-tier storage;
+  //   • content but no work (e.g. ground items only) → demote to active:false;
+  //   • live work → leave active (Ops already promoted it).
+  // Changed chunks use the fresh read; on a full sweep, unchanged chunks use the
+  // in-memory state we loaded (equal to their DB state — nothing wrote to them).
+  //
+  // Deleting an emptied chunk is safe against a concurrent player write: every
+  // chunk write upserts (lib/ops.js), so a racing action simply recreates the
+  // doc with its content. The common emptying case — the tick moving a group
+  // out — has no racer, since the tick owns that group's processing.
+  const writes = [];
+  let deleted = 0, pruned = 0;
   const consider = fullSweep ? new Set([...Object.keys(chunks), ...changedChunks]) : changedChunks;
   for (const chunkKey of consider) {
     const tiles = freshTiles.get(chunkKey) ?? chunks[chunkKey];
-    if (!hasLiveWork(tiles)) {
-      demote.push({
-        updateOne: {
-          filter: { worldId, chunkKey },
-          update: { $set: { active: false } }
-        }
-      });
+    if (!tiles) continue;
+    if (!hasAnyContent(tiles)) {
+      writes.push({ deleteOne: { filter: { worldId, chunkKey } } });
+      deleted++;
+      continue;
+    }
+    // Chunk is kept. Strip any husk tiles ({groups:{}} etc. left behind when the
+    // last entity moved out) so empty tile objects don't accumulate in the doc.
+    const update = hasLiveWork(tiles) ? {} : { $set: { active: false } };
+    const $unset = {};
+    for (const tileKey in tiles) {
+      if (isTileHusk(tiles[tileKey])) { $unset[`tiles.${tileKey}`] = ''; pruned++; }
+    }
+    if (Object.keys($unset).length) update.$unset = $unset;
+    if (Object.keys(update).length) {
+      writes.push({ updateOne: { filter: { worldId, chunkKey }, update } });
     }
   }
-  if (demote.length) await db.collection('chunks').bulkWrite(demote, { ordered: false });
+  if (writes.length) await db.collection('chunks').bulkWrite(writes, { ordered: false });
+  if (deleted || pruned) {
+    console.log(`[tick] ${worldId} storage reclaim · deleted ${deleted} chunk(s), pruned ${pruned} husk tile(s)`);
+  }
+  return { deleted, pruned };
 }

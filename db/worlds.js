@@ -14,13 +14,16 @@ export async function getAllWorldIds(db) {
 }
 
 /**
- * Loads all worlds and assembles the same nested object shape the Firebase
- * tick code expects:
- *   { worldId: { info, upgrades, crafting, chunks: { chunkKey: { tileKey: tileData } }, chat: { msgId: msg } } }
+ * Loads all worlds and assembles the nested object shape the tick expects:
+ *   { worldId: { info, upgrades, crafting, chunks: { chunkKey: { tileKey: tileData } } } }
  *
  * By default only chunks flagged `active` (or with no flag yet — legacy/new
  * docs) are loaded, so inert explored terrain costs nothing per tick. Pass
  * `{ activeOnly: false }` for the periodic full sweep that reconciles flags.
+ *
+ * Chat is intentionally NOT loaded here: the tick never reads it (it trims chat
+ * via a separate targeted query), so pulling every world's backlog into memory
+ * each tick was pure waste.
  */
 export async function loadAllWorlds(db, { activeOnly = true } = {}) {
   const worldDocs = await db.collection('worlds').find({}).toArray();
@@ -35,32 +38,16 @@ export async function loadAllWorlds(db, { activeOnly = true } = {}) {
   await Promise.all(worldDocs.map(async world => {
     const worldId = world._id;
 
-    const [chunkDocs, chatDocs] = await Promise.all([
-      db.collection('chunks').find(chunkFilter(worldId)).toArray(),
-      db.collection('chat').find({ worldId }).sort({ timestamp: 1 }).toArray()
-    ]);
+    const chunkDocs = await db.collection('chunks').find(chunkFilter(worldId)).toArray();
 
     const chunksObj = {};
     for (const c of chunkDocs) chunksObj[c.chunkKey] = c.tiles || {};
-
-    const chatObj = {};
-    for (const m of chatDocs) {
-      chatObj[m._id.toString()] = {
-        text:      m.text,
-        type:      m.type      || 'user',
-        timestamp: m.timestamp,
-        userId:    m.userId,
-        userName:  m.userName,
-        location:  m.location  || null
-      };
-    }
 
     result[worldId] = {
       info:     world.info     || {},
       upgrades: world.upgrades || null,
       crafting: world.crafting || null,
-      chunks:   chunksObj,
-      chat:     chatObj
+      chunks:   chunksObj
     };
   }));
 

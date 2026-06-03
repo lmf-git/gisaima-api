@@ -11,8 +11,15 @@ import { sendMail } from './mail.js';
 
 const scrpt = promisify(scryptSync);
 
-const JWT_SECRET     = process.env.JWT_SECRET     || 'change-me-in-production';
+// Required everywhere — no insecure fallback. Dev supplies it via .env, prod via
+// Heroku config vars. Refuse to start unset rather than sign tokens with a
+// guessable secret that would let anyone forge auth for any user.
+const JWT_SECRET     = process.env.JWT_SECRET;
 const TOKEN_TTL_SECS = 60 * 60 * 24 * 30; // 30 days
+
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is required (set it in .env for local dev, or Heroku config vars in prod)');
+}
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // passwordless sign-in link validity
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ export async function joinWorld({ uid, data, db }) {
     throw err(400, 'houseName must be 24 characters or fewer');
   }
 
-  const world = await db.collection('worlds').findOne({ _id: worldId });
+  const world = await db.collection('worlds').findOne({ _id: worldId }, { projection: { _id: 1 } });
   if (!world) throw err(404, 'world not found');
 
   const coordinates = (spawnPosition && typeof spawnPosition.x === 'number' && typeof spawnPosition.y === 'number')

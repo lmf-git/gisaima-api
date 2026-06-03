@@ -43,7 +43,7 @@ export async function moveGroup({ uid, data, db }) {
   if (group.owner !== uid) throw err(403, 'You can only move your own groups');
   if (group.status !== 'idle') throw err(409, `Group cannot be moved while in ${group.status} status`);
 
-  const worldDoc   = await db.collection('worlds').findOne({ _id: worldId });
+  const worldDoc   = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   const worldSpeed = worldDoc?.info?.speed || 1.0;
   const now        = Date.now();
   const tickMs     = Math.round(60000 / worldSpeed);

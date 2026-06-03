@@ -31,7 +31,7 @@ export async function unloadGroup({ uid, data, db }) {
   }
 
   // Prevent unloading onto water tiles
-  const worldDoc = await db.collection('worlds').findOne({ _id: worldId });
+  const worldDoc = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   const worldSeed = worldDoc?.info?.seed;
   if (worldSeed !== undefined && worldSeed !== null) {
     const generator = new TerrainGenerator(worldSeed, 1);

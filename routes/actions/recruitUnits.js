@@ -49,7 +49,7 @@ export async function recruitUnits({ uid, data, db }) {
   }
   if (insufficient.length) throw err(409, `Insufficient resources: ${insufficient.join(', ')}`);
 
-  const worldDoc   = await db.collection('worlds').findOne({ _id: worldId });
+  const worldDoc   = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   const worldSpeed = worldDoc?.info?.speed || 1;
   const ticksPerUnit = unitDef.timePerUnit || 1;
   const totalTicks   = ticksPerUnit * quantity;

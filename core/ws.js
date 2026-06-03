@@ -28,7 +28,20 @@ let _wss;
 const PING_INTERVAL_MS = 30_000;
 
 export function attachWss(server) {
-  _wss = new WebSocketServer({ server });
+  _wss = new WebSocketServer({
+    server,
+    // Compress larger frames (chunk_update payloads benefit most). Tuned for a
+    // shared 512MB dyno: skip small frames, cap concurrent compressions, and
+    // disable context takeover so each connection's zlib state stays cheap —
+    // a small ratio cost for bounded per-socket memory with many clients.
+    perMessageDeflate: {
+      threshold:               1024,
+      concurrencyLimit:        10,
+      clientNoContextTakeover: true,
+      serverNoContextTakeover: true,
+      zlibDeflateOptions:      { level: 6, memLevel: 7 },
+    },
+  });
 
   _wss.on('connection', ws => {
     subscriptions.set(ws, new Set());
@@ -60,6 +73,21 @@ export function attachWss(server) {
   }, PING_INTERVAL_MS);
 
   _wss.on('close', () => clearInterval(heartbeat));
+}
+
+/** Number of currently-connected WebSocket clients (for /metrics). */
+export function getClientCount() {
+  return _wss ? _wss.clients.size : 0;
+}
+
+/** Close all client sockets and the WS server (called on graceful shutdown). */
+export function closeWss() {
+  if (!_wss) return;
+  for (const ws of _wss.clients) {
+    try { ws.close(1001, 'server shutting down'); } catch { /* ignore */ }
+  }
+  _wss.close();
+  _wss = null;
 }
 
 function handleClientMessage(ws, msg) {

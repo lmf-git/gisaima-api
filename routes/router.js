@@ -25,6 +25,13 @@ import * as stats     from './stats.js';
 import * as lives     from './lives.js';
 import { getScouting } from './scouting.js';
 import * as itemRoutes from './items.js';
+import { rateLimit, clientIp } from '../lib/rateLimit.js';
+import { getMetrics } from './metrics.js';
+
+// Per-IP cap on unauthenticated auth attempts (brute-force / signup abuse) and
+// per-user cap on authenticated mutations (runaway clients / scripted abuse).
+const AUTH_LIMIT  = { max: 20,  windowMs: 60_000 };
+const WRITE_LIMIT = { max: 180, windowMs: 60_000 };
 
 import attack                from './actions/attack.js';
 import equipItem             from './actions/equipItem.js';
@@ -56,10 +63,15 @@ export async function route(db, req, body) {
   const p = new URL(req.url, 'http://localhost').pathname.replace(/\/$/, '') || '/';
   const [, s1, s2, s3, s4, s5] = p.split('/');
 
-  // ── Healthcheck ───────────────────────────────────────────────────────────
+  // ── Healthcheck + metrics ─────────────────────────────────────────────────
   if (method === 'GET' && p === '/') return { ok: true };
+  if (method === 'GET' && p === '/metrics') return getMetrics(db, req);
 
   // ── Auth (public) ─────────────────────────────────────────────────────────
+  if (method === 'POST' && p.startsWith('/auth/')) {
+    const { allowed, retryAfterMs } = rateLimit(`auth:${clientIp(req)}`, AUTH_LIMIT.max, AUTH_LIMIT.windowMs);
+    if (!allowed) throw apiError(429, `too many attempts — retry in ${Math.ceil(retryAfterMs / 1000)}s`);
+  }
   if (method === 'POST' && p === '/auth/guest')    return handleGuestLogin(db, req, body);
   if (method === 'POST' && p === '/auth/register') return handleRegister(db, req, body);
   if (method === 'POST' && p === '/auth/login')    return handleLogin(db, req, body);
@@ -115,6 +127,13 @@ export async function route(db, req, body) {
   // tokens whose user no longer exists so stale sessions can't keep playing.
   const account = await db.collection('users').findOne({ _id: auth.uid }, { projection: { _id: 1 } });
   if (!account) throw apiError(401, 'account no longer exists');
+
+  // Throttle authenticated mutations per user. Reads (GET) are exempt — they're
+  // cheap and idempotent; only state changes count toward the budget.
+  if (method !== 'GET') {
+    const { allowed, retryAfterMs } = rateLimit(`uid:${auth.uid}`, WRITE_LIMIT.max, WRITE_LIMIT.windowMs);
+    if (!allowed) throw apiError(429, `rate limit exceeded — retry in ${Math.ceil(retryAfterMs / 1000)}s`);
+  }
 
   // Bump per-world lastSeen so the cleanup tick can tell active players
   // from inactive ones. Fire-and-forget — never blocks the request.

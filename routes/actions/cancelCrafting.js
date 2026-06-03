@@ -17,7 +17,7 @@ export async function cancelCrafting({ uid, data, db }) {
   const { worldId, craftingId } = data;
   if (!worldId || !craftingId) throw err(400, 'Missing required parameters');
 
-  const worldDoc = await db.collection('worlds').findOne({ _id: worldId });
+  const worldDoc = await db.collection('worlds').findOne({ _id: worldId }, { projection: { crafting: 1 } });
   const crafting = worldDoc?.crafting?.[craftingId];
   if (!crafting)                    throw err(404, 'Crafting not found');
   if (crafting.playerId !== uid)    throw err(403, 'You cannot cancel this crafting');

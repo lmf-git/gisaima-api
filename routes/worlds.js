@@ -8,7 +8,7 @@ export async function getWorlds(db) {
 }
 
 export async function getWorld(db, worldId) {
-  const world = await db.collection('worlds').findOne({ _id: worldId });
+  const world = await db.collection('worlds').findOne({ _id: worldId }, { projection: { info: 1 } });
   if (!world) throw apiError(404, 'world not found');
   return { id: world._id, ...world.info };
 }
