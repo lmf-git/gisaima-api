@@ -12,6 +12,8 @@ import { merge } from "gisaima-shared/economy/items.js";
 import { getDb } from "../db/connection.js";
 import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
+import { chronicleCapture, chroniclePlayerKill, chronicleBattle } from "../db/chronicle.js";
+import { resolveHouseTribe, insertScopedReport } from "../db/reports.js";
 import { applyKillEffect as applyMoralityKillEffect } from "../db/morality.js";
 import { killCharacter } from "../db/lives.js";
 import { broadcastToUser } from "../core/ws.js";
@@ -321,6 +323,34 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         side2Power += power;
         console.log(`Side 2 Group ${groupId} calculated power: ${power}`);
       }
+    }
+
+    // Tally combatants this tick (before casualties resolve) so the Chronicle
+    // can record record-breaking battles, with each side's group names.
+    let battleUnitCount = 0;
+    const side1Names = [];
+    const side2Names = [];
+    for (const groupId in side1Groups) {
+      const g = tile.groups?.[groupId];
+      if (!g) continue;
+      battleUnitCount += Object.keys(g.units || {}).length;
+      if (g.name) side1Names.push(g.name);
+    }
+    for (const groupId in side2Groups) {
+      const g = tile.groups?.[groupId];
+      if (!g) continue;
+      battleUnitCount += Object.keys(g.units || {}).length;
+      if (g.name) side2Names.push(g.name);
+    }
+    if (battleUnitCount > 1) {
+      const locX = battle.locationX ?? parseInt(tileKey.split(',')[0]);
+      const locY = battle.locationY ?? parseInt(tileKey.split(',')[1]);
+      chronicleBattle(getDb(), worldId, {
+        units: battleUnitCount,
+        side1Names,
+        side2Names,
+        location: { x: locX, y: locY },
+      }).catch(err => console.error('[chronicle-battle]', err));
     }
 
     // Add structure power if applicable - now using STRUCTURES definition
@@ -774,6 +804,29 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
               const killerUid = await _lifeUid(dbConn, killerLifeId);
               if (!killerUid) return;
               await recordKill(dbConn, worldId, killerUid).catch(() => {});
+
+              // Chronicle the kill if the victim outranks any previously-fallen
+              // player. Points come from the cached standing on the player doc
+              // (kept fresh by the rankings endpoint).
+              const victimDoc = victimUid ? await dbConn.collection('players').findOne(
+                { _id: victimUid },
+                { projection: { [`worlds.${worldId}.points`]: 1 } }
+              ).catch(() => null) : null;
+              const victimPoints = victimDoc?.worlds?.[worldId]?.points || 0;
+              if (victimPoints > 0) {
+                const killerDoc = await dbConn.collection('players').findOne(
+                  { _id: killerUid },
+                  { projection: { [`worlds.${worldId}.displayName`]: 1 } }
+                ).catch(() => null);
+                chroniclePlayerKill(dbConn, worldId, {
+                  victimName: player.displayName,
+                  victimUid,
+                  victimPoints,
+                  killerName: killerDoc?.worlds?.[worldId]?.displayName || null,
+                  killerUid,
+                  location,
+                }).catch(err => console.error('[chronicle-kill]', err));
+              }
               const m = await applyMoralityKillEffect(dbConn, worldId, killerUid, victimUid, location).catch(() => null);
               if (m) {
                 ops.chat(worldId, {
@@ -1110,6 +1163,52 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                   location: { x: locX, y: locY },
                 });
                 console.log(`Structure ${structureName} captured by ${capturer.displayName} from ${prevOwnerName}`);
+
+                // Chronicle the capture if this is the highest-ranked or richest
+                // stronghold to fall in this world.
+                const structurePoints = (structure.level || 1)
+                  + Object.values(structure.buildings || {}).reduce((s, b) => s + (b.level || 1), 0);
+                const structureWealth = Number(structure.items?.GOLD || 0);
+                const captureGroupNames = (side1Surviving || [])
+                  .map(gid => tile.groups?.[gid]?.name)
+                  .filter(Boolean);
+                chronicleCapture(getDb(), worldId, {
+                  structureName,
+                  points: structurePoints,
+                  wealth: structureWealth,
+                  location: { x: locX, y: locY },
+                  capturerUid: capturer.uid,
+                  capturerName: capturer.displayName,
+                  prevOwnerName,
+                  groupNames: captureGroupNames,
+                }).catch(err => console.error('[chronicle-capture]', err));
+
+                // House/tribe reports — notify the victor's and the loser's
+                // banners that a stronghold changed hands.
+                (async () => {
+                  const dbc = getDb();
+                  const loc = { x: locX, y: locY };
+                  const [cap, prev] = await Promise.all([
+                    resolveHouseTribe(dbc, worldId, capturer.uid),
+                    resolveHouseTribe(dbc, worldId, prevOwner),
+                  ]);
+                  const won = {
+                    type: 'structure_captured',
+                    title: `${structureName} Captured`,
+                    summary: `${capturer.displayName} captured ${structureName} at (${locX}, ${locY}) from ${prevOwnerName}.`,
+                    location: loc,
+                  };
+                  const lost = {
+                    type: 'structure_lost',
+                    title: `${structureName} Lost`,
+                    summary: `${structureName} at (${locX}, ${locY}) was captured by ${capturer.displayName}.`,
+                    location: loc,
+                  };
+                  if (cap.houseId)  insertScopedReport(dbc, worldId, { houseId: cap.houseId }, won).catch(() => {});
+                  if (cap.tribeId)  insertScopedReport(dbc, worldId, { tribeId: cap.tribeId }, won).catch(() => {});
+                  if (prev.houseId) insertScopedReport(dbc, worldId, { houseId: prev.houseId }, lost).catch(() => {});
+                  if (prev.tribeId) insertScopedReport(dbc, worldId, { tribeId: prev.tribeId }, lost).catch(() => {});
+                })().catch(err => console.error('[scoped-report]', err));
               } else {
                 // DESTROY (monster lairs or unowned structures)
                 willDestroyStructure = true;

@@ -30,6 +30,7 @@ import { processRecruitment }      from '../events/recruitmentTick.js';
 import { tickClosure as tickVoteClosure } from '../db/politics.js';
 import { tick as tickBanks }              from '../db/banks.js';
 import { progressTrails }                 from '../db/trails.js';
+import { tickTradeRoutes }                 from '../db/tradeRoutes.js';
 import { tick as tickCleanup }            from '../db/cleanup.js';
 import { tick as tickMonsterPopulation }  from '../db/monsterCleanup.js';
 import { processStructureProduction }     from '../events/structureProductionTick.js';
@@ -333,6 +334,12 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
     if (trailsCompleted > 0) console.log(`[tick] ${worldId} ${trailsCompleted} treasure trail(s) completed`);
   } catch (err) {
     console.error(`[tick] trails ${worldId}:`, err);
+  }
+  try {
+    const shipped = await tickTradeRoutes(db, worldId);
+    if (shipped > 0) console.log(`[tick] ${worldId} ${shipped} auto trade shipment(s) dispatched`);
+  } catch (err) {
+    console.error(`[tick] trade routes ${worldId}:`, err);
   }
   mark('domainHooks');
 

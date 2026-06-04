@@ -1,8 +1,8 @@
-import { getPlayerReports, markReportRead } from '../db/reports.js';
+import { getReportsFor, resolveHouseTribe, markReportRead } from '../db/reports.js';
 
 export async function getReports(db, auth, worldId) {
-  const rows = await getPlayerReports(db, worldId, auth.uid);
-  return rows.map(r => ({ ...r, _id: r._id.toString() }));
+  const { houseId, tribeId } = await resolveHouseTribe(db, worldId, auth.uid);
+  return getReportsFor(db, worldId, { uid: auth.uid, houseId, tribeId });
 }
 
 export async function postReportRead(db, auth, worldId, reportId) {

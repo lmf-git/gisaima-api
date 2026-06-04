@@ -14,6 +14,7 @@ import { getFriends, getFriendRequests, postFriendRequest,
          postAcceptRequest, postDeclineRequest, postRemoveFriend } from './friends.js';
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
+import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
 import { getPolitics, postVote }                        from './politics.js';
 import * as morality  from './morality.js';
 import * as ransom    from './ransom.js';
@@ -24,6 +25,8 @@ import * as cosmetics from './cosmetics.js';
 import * as stats     from './stats.js';
 import * as lives     from './lives.js';
 import { getScouting } from './scouting.js';
+import { getHoldings } from './holdings.js';
+import { getChronicle } from './chronicle.js';
 import * as itemRoutes from './items.js';
 import { rateLimit, clientIp } from '../lib/rateLimit.js';
 import { getMetrics } from './metrics.js';
@@ -88,6 +91,7 @@ export async function route(db, req, body) {
   }
   if (method === 'GET' && s1 === 'worlds' && s3 === 'chat')         return getWorldChat(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'rankings')     return getWorldRankings(db, s2);
+  if (method === 'GET' && s1 === 'worlds' && s3 === 'chronicle')    return getChronicle(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'bounties' && !s4) return getBounties(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'trade' && s4 === 'offers') {
     const a = getAuth(req);
@@ -181,6 +185,15 @@ export async function route(db, req, body) {
     throw apiError(400, 'offer action required');
   }
 
+  // Trade routes — structure-to-structure shipping lanes
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'trade' && s4 === 'routes')  return getRoutes(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'trade' && s4 === 'routes') {
+    const [, , , , , s5, s6] = p.split('/');
+    if (!s5) return postRoute(db, auth, s2, body);
+    if (s6) return postRouteAction(db, auth, s2, s5, s6, body);
+    throw apiError(400, 'route action required');
+  }
+
   // Politics
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && s4)               return postVote(db, auth, s2, s4, body);
 
@@ -211,6 +224,7 @@ export async function route(db, req, body) {
 
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'stats' && !s4)                 return stats.getMine(db, s2, auth.uid);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'stats')                        return stats.postFlag(db, auth, s2, body);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'holdings')                     return getHoldings(db, s2, auth.uid);
 
   // Items
   if (method === 'POST' && s1 === 'worlds' && s3 === 'items' && s4 === 'drop')       return itemRoutes.postDrop(db, auth, s2, body);

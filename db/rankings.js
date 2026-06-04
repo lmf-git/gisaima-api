@@ -90,6 +90,20 @@ export async function getRankings(db, worldId) {
 
   const top = (arr, key) => [...arr].sort((a, b) => b[key] - a[key]).slice(0, 20);
 
+  // Cache each player's standing points back onto their doc. The Chronicle reads
+  // this when deciding whether a slain player was notable enough to record.
+  if (rows.length) {
+    db.collection('players').bulkWrite(
+      rows.map(r => ({
+        updateOne: {
+          filter: { _id: r.uid },
+          update: { $set: { [`worlds.${worldId}.points`]: r.structurePoints } },
+        },
+      })),
+      { ordered: false }
+    ).catch(() => {});
+  }
+
   return {
     // By player
     kills:            top(rows, 'kills'),

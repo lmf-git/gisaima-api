@@ -84,23 +84,42 @@ function buildPath(fromX, fromY, toX, toY, terrain) {
   return path;
 }
 
+// Naval route: a ship sails the straight line between ports, crossing water
+// freely (unlike the land caravan, which steps around it).
+function buildDirectPath(fromX, fromY, toX, toY) {
+  const path = [{ x: fromX, y: fromY }];
+  let x = fromX, y = fromY;
+  let safety = Math.abs(toX - fromX) + Math.abs(toY - fromY) + 50;
+  while ((x !== toX || y !== toY) && safety-- > 0) {
+    x += Math.sign(toX - x);
+    y += Math.sign(toY - y);
+    path.push({ x, y });
+  }
+  return path;
+}
+
 export async function spawn(db, ops, worldId, {
   fromX, fromY, toX, toY,
-  items, ownerUid, toUid, risk = 'safe', tickMs = 60_000
+  items, ownerUid, toUid, risk = 'safe', tickMs = 60_000, mode = 'land', crew = null
 }) {
   if (!Number.isFinite(fromX) || !Number.isFinite(fromY)) return null;
   if (!Number.isFinite(toX) || !Number.isFinite(toY)) return null;
-  const terrain = await _terrainFor(db, worldId);
+  const naval = mode === 'naval';
+  const terrain = naval ? null : await _terrainFor(db, worldId);
   const chunkKey = getChunkKey(fromX, fromY);
   const tileKey  = `${fromX},${fromY}`;
-  const path = buildPath(fromX, fromY, toX, toY, terrain);
+  // Ships sail direct over water; caravans route around it.
+  const path = naval
+    ? buildDirectPath(fromX, fromY, toX, toY)
+    : buildPath(fromX, fromY, toX, toY, terrain);
   const id = newGroupId();
   const now = Date.now();
 
   const group = {
     id,
     type: 'caravan',
-    name: `Caravan from ${ownerUid?.slice(0, 6) || 'unknown'}`,
+    mode: naval ? 'naval' : 'land',
+    name: `${naval ? 'Trade ship' : 'Caravan'} from ${ownerUid?.slice(0, 6) || 'unknown'}`,
     owner: ownerUid || null,
     items: items || {},
     x: fromX, y: fromY,
@@ -110,11 +129,12 @@ export async function spawn(db, ops, worldId, {
     moveStarted: now,
     moveSpeed: 1,
     nextMoveTime: now + tickMs,
+    ...(crew ? { crew } : {}),
     delivery: { toUid, toX, toY, risk, spawnedAt: now }
   };
 
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${id}`, group);
-  return { groupId: id, chunkKey, tileKey };
+  return { groupId: id, chunkKey, tileKey, mode: group.mode };
 }
 
 /**
@@ -143,7 +163,43 @@ export async function deliver(db, ops, worldId, group, atChunkKey, atTileKey) {
     return { intercepted, total };
   }
 
-  const sink = await pay(db, ops, worldId, delivery.toUid, items);
+  // Prefer depositing straight into the structure standing on the arrival tile
+  // — that's the destination of a structure-to-structure trade route. Fall back
+  // to the recipient's resolved sink (home/current structure) when the arrival
+  // tile has no structure.
+  const arrivalChunk = await db.collection('chunks').findOne(
+    { worldId, chunkKey: atChunkKey },
+    { projection: { [`tiles.${atTileKey}.structure`]: 1 } }
+  );
+  const destStructure = arrivalChunk?.tiles?.[atTileKey]?.structure;
+
+  let sink;
+  if (destStructure) {
+    sink = { kind: 'structure', tileKey: atTileKey, chunkKey: atChunkKey };
+    ops.chunk(worldId, atChunkKey, `${atTileKey}.structure.items`, merge(destStructure.items || {}, items));
+    // The crew disembarks into the destination garrison.
+    if (group.crew) _garrisonCrew(ops, worldId, atChunkKey, atTileKey, destStructure, group.crew);
+  } else {
+    sink = await pay(db, ops, worldId, delivery.toUid, items);
+  }
   ops.chunk(worldId, atChunkKey, `${atTileKey}.groups.${group.id}`, null);
   return { intercepted, delivered: items, sink };
+}
+
+// Add a shipment's crew unit into a structure's garrison, merging into an
+// existing stack of the same unit type when present.
+function _garrisonCrew(ops, worldId, chunkKey, tileKey, structure, crew) {
+  const units = structure?.units;
+  const add = Number(crew.quantity) || 1;
+  if (Array.isArray(units)) {
+    ops.chunk(worldId, chunkKey, `${tileKey}.structure.units.${units.length}`, { ...crew });
+    return;
+  }
+  const obj = units || {};
+  const existingKey = Object.keys(obj).find(k => obj[k]?.unitId === crew.unitId && obj[k]?.owner === crew.owner);
+  if (existingKey) {
+    ops.chunk(worldId, chunkKey, `${tileKey}.structure.units.${existingKey}.quantity`, (Number(obj[existingKey].quantity) || 0) + add);
+  } else {
+    ops.chunk(worldId, chunkKey, `${tileKey}.structure.units.${crew.unitId || crew.id}`, { ...crew });
+  }
 }
