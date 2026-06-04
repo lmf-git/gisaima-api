@@ -326,21 +326,28 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     }
 
     // Tally combatants this tick (before casualties resolve) so the Chronicle
-    // can record record-breaking battles, with each side's group names.
+    // can record record-breaking battles, with each side's groups described.
+    // Every group is listed — those without a name fall back to their owner or
+    // a generic label — and each carries its unit count so the entry reflects
+    // the forces involved, not just the named ones.
     let battleUnitCount = 0;
     const side1Names = [];
     const side2Names = [];
+    const describeGroup = (g, out) => {
+      const units = Object.keys(g.units || {}).length;
+      battleUnitCount += units;
+      const label = g.name
+        || (g.ownerName ? `${g.ownerName}'s war-band` : null)
+        || (g.type === 'monster' ? 'a wild horde' : 'an unnamed war-band');
+      out.push(units ? `${label} (${units})` : label);
+    };
     for (const groupId in side1Groups) {
       const g = tile.groups?.[groupId];
-      if (!g) continue;
-      battleUnitCount += Object.keys(g.units || {}).length;
-      if (g.name) side1Names.push(g.name);
+      if (g) describeGroup(g, side1Names);
     }
     for (const groupId in side2Groups) {
       const g = tile.groups?.[groupId];
-      if (!g) continue;
-      battleUnitCount += Object.keys(g.units || {}).length;
-      if (g.name) side2Names.push(g.name);
+      if (g) describeGroup(g, side2Names);
     }
     if (battleUnitCount > 1) {
       const locX = battle.locationX ?? parseInt(tileKey.split(',')[0]);

@@ -18,6 +18,23 @@ async function nameMap(db, worldId, uids) {
   return map;
 }
 
+/** Search players in a world by display-name (case-insensitive substring). */
+export async function searchPlayers(db, auth, worldId, q) {
+  const term = (q || '').trim();
+  if (term.length < 2) return { players: [] };
+  const safe = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nameField = `worlds.${worldId}.displayName`;
+  const docs = await db.collection('players').find(
+    { [`worlds.${worldId}`]: { $exists: true }, [nameField]: { $regex: safe, $options: 'i' } },
+    { projection: { _id: 1, [nameField]: 1 }, limit: 20 }
+  ).toArray();
+  return {
+    players: docs
+      .filter(d => d._id !== auth.uid)
+      .map(d => ({ uid: d._id, displayName: d.worlds?.[worldId]?.displayName || 'Unknown' })),
+  };
+}
+
 export async function getFriends(db, auth, worldId) {
   const uids = await listFriends(db, worldId, auth.uid);
   const names = await nameMap(db, worldId, uids);

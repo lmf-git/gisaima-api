@@ -11,7 +11,7 @@ import { getHouses, postCreateHouse, postRequestJoinHouse,
          postApproveJoinRequest, postRejectJoinRequest } from './houses.js';
 import { getBounties, postBounty, postBountyClaim }     from './bounties.js';
 import { getFriends, getFriendRequests, postFriendRequest,
-         postAcceptRequest, postDeclineRequest, postRemoveFriend } from './friends.js';
+         postAcceptRequest, postDeclineRequest, postRemoveFriend, searchPlayers } from './friends.js';
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
@@ -162,6 +162,9 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'bounties' && s4)               return postBountyClaim(db, auth, s2, s4);
 
   // Friends
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'players' && s4 === 'search') {
+    return searchPlayers(db, auth, s2, new URL(req.url, 'http://localhost').searchParams.get('q') || '');
+  }
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && !s4)               return getFriends(db, auth, s2);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') return getFriendRequests(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') {

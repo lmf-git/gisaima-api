@@ -1,7 +1,9 @@
 /**
- * Clear all seeded data from MongoDB (opposite of seed.js).
+ * Clear ALL data from MongoDB (opposite of seed.js).
  *
- * Drops the worlds, chunks, and players collections.
+ * Drops every collection in the database — documents and indexes alike,
+ * including accounts. Discovered dynamically so new collections never leak into
+ * the next seeded world.
  *
  * Usage:
  *   node api/scripts/clear.js
@@ -19,9 +21,13 @@ async function clear() {
 
   console.log(`Clearing database "${db.databaseName}"…`);
 
-  for (const name of ['worlds', 'chunks', 'players']) {
-    const result = await db.collection(name).deleteMany({});
-    console.log(`  ${name}: ${result.deletedCount} documents deleted`);
+  const collections = await db.listCollections({}, { nameOnly: true }).toArray();
+  if (!collections.length) {
+    console.log('  (no collections)');
+  }
+  for (const { name } of collections) {
+    await db.collection(name).drop();
+    console.log(`  dropped ${name}`);
   }
 
   await client.close();

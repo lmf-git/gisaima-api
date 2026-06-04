@@ -15,6 +15,17 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 
 const SPAWN_STORE_CAP = 200;
 
+// The realm's current age, measured in game ticks. Lives are stamped with the
+// tick they were born/died on so the lineage can be told in in-world time (Ages
+// and years) rather than real-world dates. Falls back to 0 for a fresh world.
+export async function worldTick(db, worldId) {
+  const w = await db.collection('worlds').findOne(
+    { _id: worldId },
+    { projection: { 'info.tickCount': 1 } }
+  );
+  return Number(w?.info?.tickCount) || 0;
+}
+
 // Place a character entity directly on a tile (used when a child is born onto
 // the map). Entities are keyed by lifeId and carry uid.
 async function _placeOnMap(db, worldId, uid, lifeId, name, race, location) {
@@ -42,6 +53,7 @@ export async function birth(db, { worldId, uid, name, race = 'human', parentLife
   const insert = {
     worldId, uid, name, race,
     born: new Date(),
+    bornTick: await worldTick(db, worldId),
     died: null,
     deeds: 0,
     // Per-life gameplay state — each character now carries its own placement so
@@ -99,7 +111,7 @@ export async function addDeath(db, worldId, uid, { cause = 'unknown', by = null,
   if (life) {
     await db.collection('lives').updateOne(
       { _id: life._id },
-      { $set: { died: at, cause, by, deathLocation: location } }
+      { $set: { died: at, diedTick: await worldTick(db, worldId), cause, by, deathLocation: location } }
     );
   }
   await db.collection('players').updateOne(
@@ -235,7 +247,7 @@ export async function killCharacter(db, worldId, uid, lifeId, { cause = 'unknown
   const _id = new ObjectId(lifeId);
   await db.collection('lives').updateOne(
     { _id, worldId, uid },
-    { $set: { died: at, cause, by, deathLocation: location, active: false, alive: false, inGroup: null } }
+    { $set: { died: at, diedTick: await worldTick(db, worldId), cause, by, deathLocation: location, active: false, alive: false, inGroup: null } }
   );
 
   const remaining = await db.collection('lives')
@@ -353,6 +365,7 @@ export async function reproduce(db, worldId, parentLifeIds = []) {
 
   const ethnicity = _pickEthnicity(parents);
   const trait     = _pickTrait(parents);
+  const bornTick  = await worldTick(db, worldId);
 
   const count = _howManyChildren();
   const heirs = [];
@@ -368,6 +381,7 @@ export async function reproduce(db, worldId, parentLifeIds = []) {
       uid: ownerUid,
       name: `${baseName} the ${trait}${count > 1 ? ` (${i + 1})` : ''}`,
       born: new Date(),
+      bornTick,
       died: null,
       deeds: 0,
       sex,
