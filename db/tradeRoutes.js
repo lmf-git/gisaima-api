@@ -18,8 +18,60 @@
 
 import { ObjectId } from 'mongodb';
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { Ops } from '../lib/ops.js';
 import { spawn as spawnShipment } from './caravans.js';
+
+const _terrainByWorld = new Map();
+async function terrainFor(db, worldId) {
+  if (_terrainByWorld.has(worldId)) return _terrainByWorld.get(worldId);
+  const w = await db.collection('worlds').findOne({ _id: worldId }, { projection: { 'info.seed': 1 } });
+  const gen = new TerrainGenerator(w?.info?.seed ?? 1, 4_000);
+  _terrainByWorld.set(worldId, gen);
+  return gen;
+}
+
+const _DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+function isWater(terrain, x, y) {
+  try { return !!terrain.getTerrainData(x, y)?.water; } catch { return false; }
+}
+
+// True water-path check: a bounded flood-fill over sea tiles from the open water
+// beside the origin port to the open water beside the destination port. Both
+// ports sit on land, so we seed/aim at their water-adjacent neighbours. The
+// search is boxed (with a margin) and capped so it can never run away on the
+// infinite procedural map.
+function navigableByWater(terrain, fromX, fromY, toX, toY, { maxExplore = 6000, margin = 60 } = {}) {
+  const seed = [];
+  for (const [dx, dy] of _DIRS) if (isWater(terrain, fromX + dx, fromY + dy)) seed.push([fromX + dx, fromY + dy]);
+  if (!seed.length) return false; // origin isn't actually on the coast
+
+  const goal = new Set();
+  for (const [dx, dy] of _DIRS) if (isWater(terrain, toX + dx, toY + dy)) goal.add(`${toX + dx},${toY + dy}`);
+  if (!goal.size) return false; // destination isn't on the coast
+
+  const minX = Math.min(fromX, toX) - margin, maxX = Math.max(fromX, toX) + margin;
+  const minY = Math.min(fromY, toY) - margin, maxY = Math.max(fromY, toY) + margin;
+
+  const seen = new Set(seed.map(([x, y]) => `${x},${y}`));
+  const queue = [...seed];
+  let explored = 0;
+  while (queue.length && explored < maxExplore) {
+    const [x, y] = queue.shift();
+    explored++;
+    if (goal.has(`${x},${y}`)) return true;
+    for (const [dx, dy] of _DIRS) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+      const key = `${nx},${ny}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (isWater(terrain, nx, ny)) queue.push([nx, ny]);
+    }
+  }
+  return false;
+}
 
 // A structure can launch ships if it has a harbour building.
 export function hasHarbour(structure) {
@@ -34,6 +86,16 @@ export function hasHarbour(structure) {
 // one to dock at. Anything else goes overland by caravan.
 export function classifyMode(originStructure, destStructure) {
   return hasHarbour(originStructure) && hasHarbour(destStructure) ? 'naval' : 'land';
+}
+
+// Decide the shipping mode for real: naval only when both ends are ports AND an
+// actual open-water lane connects them; otherwise an overland caravan. Walks the
+// terrain, so it's called once at create/run time and the result is cached on
+// the route (terrain never changes) rather than re-checked every autoship tick.
+async function resolveMode(db, worldId, originStructure, destStructure, fromX, fromY, toX, toY) {
+  if (classifyMode(originStructure, destStructure) !== 'naval') return 'land';
+  const terrain = await terrainFor(db, worldId);
+  return navigableByWater(terrain, fromX, fromY, toX, toY) ? 'naval' : 'land';
 }
 
 // Pull one non-player unit from a structure's garrison to crew a shipment,
@@ -105,7 +167,7 @@ function chargeStructure(ops, worldId, chunkKey, tileKey, structure, items) {
 
 // Validate the endpoints and dispatch one shipment. Shared by createRoute,
 // runRoute and the autoship tick. Returns { ok, mode } or { ok:false, reason }.
-async function dispatchShipment(db, worldId, ownerUid, { fromX, fromY, toX, toY, items }) {
+async function dispatchShipment(db, worldId, ownerUid, { fromX, fromY, toX, toY, items, mode: forcedMode }) {
   const [origin, dest] = await Promise.all([
     loadTile(db, worldId, fromX, fromY),
     loadTile(db, worldId, toX, toY),
@@ -114,8 +176,10 @@ async function dispatchShipment(db, worldId, ownerUid, { fromX, fromY, toX, toY,
   if (!dest?.tile?.structure)   return { ok: false, reason: 'destination is not a structure' };
   if (origin.tile.structure.owner !== ownerUid) return { ok: false, reason: 'you do not own the origin structure' };
 
-  // Naval requires a harbour at BOTH ends; otherwise it sails as a land caravan.
-  const mode = classifyMode(origin.tile.structure, dest.tile.structure);
+  // Naval requires a harbour at BOTH ends AND a navigable sea lane; otherwise a
+  // land caravan. Autoship passes the cached mode to skip the terrain walk.
+  const mode = forcedMode
+    || await resolveMode(db, worldId, origin.tile.structure, dest.tile.structure, fromX, fromY, toX, toY);
   const toUid = dest.tile.structure.owner || null;
 
   const ops = new Ops();
@@ -226,6 +290,7 @@ export async function tickTradeRoutes(db, worldId) {
     try {
       const result = await dispatchShipment(db, worldId, route.ownerUid, {
         fromX: route.fromX, fromY: route.fromY, toX: route.toX, toY: route.toY, items: route.items,
+        mode: route.mode, // cached — terrain doesn't change, skip the sea-lane walk
       });
       if (result.ok) {
         shipped++;
