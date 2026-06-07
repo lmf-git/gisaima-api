@@ -49,17 +49,17 @@ __metadata:
   resolution: "gisaima-api@workspace:."
   dependencies:
     dotenv: "npm:^17.4.1"
-    gisaima-shared: "https://github.com/lmf-git/gisaima-v3-shared.git#34e20c5d7282d3c9545c34034b55d223806e32b0"
+    gisaima-shared: "https://github.com/lmf-git/gisaima-v3-shared.git#67b5fae7027b33337a771b7df3b73446c31ef946"
     mongodb: "npm:^6.0.0"
     nodemailer: "npm:^8.0.10"
     ws: "npm:^8.0.0"
   languageName: unknown
   linkType: soft
 
-"gisaima-shared@https://github.com/lmf-git/gisaima-v3-shared.git#34e20c5d7282d3c9545c34034b55d223806e32b0":
+"gisaima-shared@https://github.com/lmf-git/gisaima-v3-shared.git#67b5fae7027b33337a771b7df3b73446c31ef946":
   version: 1.0.0
-  resolution: "gisaima-shared@https://github.com/lmf-git/gisaima-v3-shared.git#commit=34e20c5d7282d3c9545c34034b55d223806e32b0"
-  checksum: 10c0/73bd1a7a157eebe0cec298d4af2f0acfc274513061f9cdc9b5b9cb80e06747c2f70fffb4ff05b1bb9ffbf3bb19bc9b2a983e43c709ef23e136a3e49cc0315f10
+  resolution: "gisaima-shared@https://github.com/lmf-git/gisaima-v3-shared.git#commit=67b5fae7027b33337a771b7df3b73446c31ef946"
+  checksum: 10c0/c5a077e319cbb98ad876a234af7f546ea83960c145ebc6b9dce88534050b97eb0657e5790c1264ecedb004c3dab93bd3f4ff2857e35136a4ae605718d30ec98b
   languageName: node
   linkType: hard
 

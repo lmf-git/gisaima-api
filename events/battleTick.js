@@ -8,7 +8,7 @@ import {
   processPvPCombat,
 } from "gisaima-shared/war/battles.js";
 import { STRUCTURES } from "gisaima-shared/definitions/STRUCTURES.js";
-import { merge } from "gisaima-shared/economy/items.js";
+import { merge, groupCarryCapacity, splitToCapacity } from "gisaima-shared/economy/items.js";
 import { getDb } from "../db/connection.js";
 import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
@@ -55,8 +55,18 @@ export function distributeLootToWinner({
     const receivingGroup = tile.groups?.[receivingGroupId];
     const existingGroupItems = receivingGroup?.items || {};
 
-    // Merge existing group items with battle loot
-    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${receivingGroupId}.items`, merge(existingGroupItems, battleLoot));
+    // Merge existing group items with battle loot, but only up to what the group
+    // can carry — anything over its carry capacity spills onto the tile.
+    const mergedItems = merge(existingGroupItems, battleLoot);
+    const capacity = groupCarryCapacity(receivingGroup);
+    const { kept, overflow } = splitToCapacity(mergedItems, capacity);
+
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${receivingGroupId}.items`, kept);
+
+    if (Object.keys(overflow).some(k => !k.startsWith('_'))) {
+      ops.chunk(worldId, chunkKey, `${tileKey}.items`, merge(tile?.items || {}, overflow));
+      console.log(`Battle loot exceeded group ${receivingGroupId} carry capacity (${capacity}) — overflow dropped on tile`);
+    }
   } else {
     // If winner is determined but no surviving groups, OR if it's a draw (winner === 0)
     // Check if there's a structure to add loot to, otherwise leave on tile as "treasure"

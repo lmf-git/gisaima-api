@@ -3,11 +3,14 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { merge, groupCarryCapacity, itemCount } from 'gisaima-shared/economy/items.js';
 import { Ops } from '../../lib/ops.js';
 import { grantAchievement } from '../../lib/achievements.js';
 
 export async function startGathering({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId, gatherUntilFull = false } = data;
+  // Item codes the player chose to scoop up off the tile before biome gathering.
+  const collectItems = Array.isArray(data.collectItems) ? data.collectItems : [];
 
   if (!groupId || locationX === undefined || locationY === undefined || !worldId) {
     throw err(400, 'Missing required parameters');
@@ -29,6 +32,35 @@ export async function startGathering({ uid, data, db }) {
   const GATHER_TICKS = 2;
 
   const ops = new Ops();
+
+  // Pick up the selected tile items into the group first, limited by what the
+  // group can still carry. Whatever fits is moved off the tile; biome gathering
+  // then fills any remaining capacity during the tick.
+  if (collectItems.length && tile.items && typeof tile.items === 'object') {
+    const capacity = groupCarryCapacity(group);
+    let room = capacity > 0 ? Math.max(0, capacity - itemCount(group.items)) : Infinity;
+
+    const tileItems = { ...tile.items };
+    const picked = {};
+    for (const raw of collectItems) {
+      if (room <= 0) break;
+      const code = String(raw).toUpperCase();
+      if (code.startsWith('_')) continue;
+      const avail = Number(tileItems[code]) || 0;
+      if (avail <= 0) continue;
+      const take = Math.min(avail, room);
+      picked[code] = take;
+      tileItems[code] = avail - take;
+      if (tileItems[code] <= 0) delete tileItems[code];
+      room -= take;
+    }
+
+    if (Object.keys(picked).length) {
+      ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`, merge(group.items || {}, picked));
+      ops.chunk(worldId, chunkKey, `${tileKey}.items`, tileItems);
+    }
+  }
+
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'gathering');
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         biome);
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, GATHER_TICKS);
