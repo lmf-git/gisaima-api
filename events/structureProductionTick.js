@@ -3,31 +3,40 @@
  *
  * For each tile that hosts a structure with productive buildings, generates
  * a small per-tick output (based on building type & level), credits it to
- * the structure's `items` pool, and skims the configured tax % into the
- * world's `coffers` collection.
+ * the structure's `items` pool — up to a per-structure storage cap — and skims
+ * the configured tax % into the world's `coffers` collection.
  *
  * Buildings recognised:
  *   mine     → METAL_ORE / STONE
  *   farm     → WHEAT / BERRIES
  *   smithy   → CRUDE_WEAPON (slower)
  *   workshop → WOOD (slower)
- *   market   → GOLD (commerce yield)
  *
- * The output rates are deliberately modest — they fill stores over many
- * ticks rather than swamping the economy.
+ * GOLD is NOT produced passively — currency is only earned through play
+ * (trade, bounties, taxes), never minted by simply owning a market.
+ *
+ * Output is produced only every PRODUCTION_INTERVAL ticks and each item is
+ * capped at STORAGE_CAP_PER_LEVEL × structure level, so stores fill slowly and
+ * never accumulate without bound.
  */
 import { merge } from 'gisaima-shared/economy/items.js';
 import { applyProductionTax } from '../db/productionTax.js';
 
+// Produce once every N ticks rather than every tick — keeps the economy slow.
+const PRODUCTION_INTERVAL = 5;
+
+// Per-item storage ceiling for passive production, scaled by structure level.
+const STORAGE_CAP_PER_LEVEL = 200;
+
 const BUILDING_OUTPUT = {
-  mine:     [['METAL_ORE',       1, 0.5], ['STONE', 2, 1.0]],
-  quarry:   [['STONE',   3, 1.5]],
-  lumberyard: [['WOOD', 4, 2.0]],
-  farm:     [['WHEAT',          3, 1.5], ['BERRIES',     1, 0.5]],
+  mine:     [['METAL_ORE',       1, 0.34], ['STONE', 1, 0.5]],
+  quarry:   [['STONE',   1, 0.5]],
+  lumberyard: [['WOOD', 1, 0.5]],
+  farm:     [['WHEAT',          1, 0.5], ['BERRIES',     1, 0.25]],
   smithy:   [['CRUDE_WEAPON',   1, 0.2]],
-  workshop: [['WOOD',  2, 1.0]],
-  market:   [['GOLD',           5, 2.5]],
-  stable:   [['LEATHER',        1, 0.4]],
+  workshop: [['WOOD',  1, 0.34]],
+  market:   [], // commerce, not passive minting — no GOLD here
+  stable:   [['LEATHER',        1, 0.2]],
   barracks: [], // produces via the recruit queue, not passively
   wall:     [],
   academy:  [],
@@ -60,10 +69,15 @@ function _outputFor(buildings) {
  *
  * Returns counts: { produced, taxed (gold-equivalent units), structures }
  */
-export async function processStructureProduction(db, worldId, chunks, ops) {
+export async function processStructureProduction(db, worldId, chunks, ops, tickCount = 0) {
   let producedStructures = 0;
   let totalTaxed = 0;
   const cofferDelta = {};
+
+  // Slow the economy down: only produce on every PRODUCTION_INTERVAL-th tick.
+  if (Number(tickCount) % PRODUCTION_INTERVAL !== 0) {
+    return { producedStructures, totalTaxed };
+  }
 
   for (const [chunkKey, tiles] of Object.entries(chunks || {})) {
     for (const [tileKey, tile] of Object.entries(tiles || {})) {
@@ -77,9 +91,18 @@ export async function processStructureProduction(db, worldId, chunks, ops) {
 
       const { kept, taxed } = applyProductionTax(output, s.taxes || {});
 
-      // Credit kept items to the structure's store.
+      // Credit kept items to the structure's store, capped per item so passive
+      // production can't run away. The cap only limits what production adds — it
+      // never trims items already stored (e.g. player deposits).
       if (Object.keys(kept).length) {
         const merged = merge(s.items || {}, kept);
+        const cap = STORAGE_CAP_PER_LEVEL * Math.max(1, Number(s.level) || 1);
+        for (const code of Object.keys(kept)) {
+          const norm = code.toUpperCase();
+          const added = kept[code] || 0;
+          const prev = (merged[norm] || 0) - added;   // store before this tick's output
+          if (merged[norm] > cap) merged[norm] = Math.max(prev, cap);
+        }
         ops.chunk(worldId, chunkKey, `${tileKey}.structure.items`, merged);
         producedStructures++;
       }

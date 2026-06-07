@@ -306,7 +306,7 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   // --- Structure passive production + tax skim ---
   try {
     const prodOps = new Ops();
-    const r = await processStructureProduction(db, worldId, chunks, prodOps);
+    const r = await processStructureProduction(db, worldId, chunks, prodOps, worldInfo.tickCount);
     await prodOps.flush(db);
     if (r.producedStructures > 0 || r.totalTaxed > 0) {
       console.log(`[tick] ${worldId} production: ${r.producedStructures} structures · ${r.totalTaxed} gold to coffers`);
