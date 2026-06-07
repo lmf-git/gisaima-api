@@ -59,9 +59,11 @@ export async function addBuilding({ uid, data, db }) {
     throw err(409, 'This structure already has that building');
   }
 
-  // Slot limit: spawns allow up to 5, otherwise one per structure level.
+  // Slot limit: the structure spans the whole tile, so every subgrid cell is a
+  // building plot — a structure holds subN² buildings.
   const isSpawn = structure.type === 'spawn';
-  const cap = isSpawn ? 5 : (structure.level || 1);
+  const subCap = subgridSize(structure.level || 0) ** 2;
+  const cap = isSpawn ? Math.max(5, subCap) : subCap;
   if (Object.keys(buildings).length >= cap) throw err(409, 'No building slots available');
 
   // --- Resource check & spend from the shared pool (preserve container shape) ---
@@ -116,12 +118,10 @@ export async function addBuilding({ uid, data, db }) {
   }
 
   // --- Choose a free subgrid cell ---
+  // Every cell is buildable; the structure icon merely shows on the centre cell
+  // when nothing is built there, so it doesn't reserve a plot.
   const subN = subgridSize(structure.level || 0);
-  const center = Math.floor(subN / 2);
-  const iconRow = Number.isInteger(structure.subRow) ? structure.subRow : center;
-  const iconCol = Number.isInteger(structure.subCol) ? structure.subCol : center;
   const occupied = new Set(Object.values(buildings).map(b => `${b.subRow}-${b.subCol}`));
-  occupied.add(`${iconRow}-${iconCol}`);
 
   let subRow, subCol;
   if (Number.isInteger(subCell)) {
