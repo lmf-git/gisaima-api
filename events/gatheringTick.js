@@ -2,10 +2,9 @@
  * Gathering tick processing for Gisaima
  */
 
-import { merge } from 'gisaima-shared/economy/items.js';
+import { merge, groupCarryCapacity } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { splitAndCreditStructure } from '../db/productionTax.js';
-import UNITS from 'gisaima-shared/definitions/UNITS.js';
 import { geneticMod } from 'gisaima-shared/lives/genetics.js';
 
 function _units(group) {
@@ -17,14 +16,6 @@ function _units(group) {
 // ethnicity/trait, which mobilise copies onto the unit).
 function groupGeneticMod(group, key) {
   return _units(group).reduce((sum, u) => sum + (u?.type === 'player' ? geneticMod(u, key) : 0), 0);
-}
-
-function groupCapacity(group) {
-  if (!group.units) return 0;
-  const units = _units(group);
-  // Westmark/+carry ethnicity widens a character's load.
-  return units.reduce((sum, u) =>
-    sum + (UNITS[u.type]?.carryCapacity ?? 5) + (u?.type === 'player' ? geneticMod(u, 'carry') : 0), 0);
 }
 
 function groupItemCount(items) {
@@ -87,7 +78,9 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   const { kept: keptItems } =
     splitAndCreditStructure(ops, worldId, chunkKey, tileKey, tile, gatheredItems);
 
-  const capacity      = groupCapacity(group);
+  // Same capacity the UI shows (shared groupCarryCapacity), so "gather until
+  // full" stops exactly at the displayed number — no server/client divergence.
+  const capacity      = groupCarryCapacity(group);
   // Only carry what fits — never overshoot capacity by a whole batch. Existing
   // items are preserved; the freshly gathered batch is trimmed to the space
   // that remains.

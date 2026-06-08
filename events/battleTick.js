@@ -1025,7 +1025,10 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       // Create battle reports for involved players
       if (winner !== 0) {
         const winnerSurviving  = winner === 1 ? side1Surviving : side2Surviving;
-        const loserGroups      = winner === 1 ? Object.keys(side1Groups || {}) : Object.keys(side2Groups || {});
+        // The loser is the OTHER side — winner 1 → side2 lost, winner 2 → side1
+        // lost. (This was inverted, so the winner's own players also received the
+        // defeat report, showing the same battle as both a victory and a defeat.)
+        const loserGroups      = winner === 1 ? Object.keys(side2Groups || {}) : Object.keys(side1Groups || {});
         const winnerCasualties = winner === 1 ? side1Casualties : side2Casualties;
         const loserCasualties  = winner === 1 ? side2Casualties : side1Casualties;
         const winnerName       = winner === 1 ? side1Name : side2Name;
