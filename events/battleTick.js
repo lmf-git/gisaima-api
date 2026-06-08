@@ -14,10 +14,22 @@ import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
 import { chronicleCapture, chroniclePlayerKill, chronicleBattle } from "../db/chronicle.js";
 import { resolveHouseTribe, insertScopedReport } from "../db/reports.js";
-import { applyKillEffect as applyMoralityKillEffect } from "../db/morality.js";
+import { applyKillEffect as applyMoralityKillEffect, scoresFor as moralityScoresFor, moralityCombatFactor } from "../db/morality.js";
 import { killCharacter } from "../db/lives.js";
 import { broadcastToUser } from "../core/ws.js";
+import { geneticMod } from "gisaima-shared/lives/genetics.js";
 import { ObjectId } from "mongodb";
+
+// Combat edge from the genetics of a group's player units: Drava/+atk and
+// Brennec/+def ethnicities (and atk/def traits) each add 5% to group power.
+function geneticCombatFactor(group) {
+  const units = group?.units ? (Array.isArray(group.units) ? group.units : Object.values(group.units)) : [];
+  let bonus = 0;
+  for (const u of units) {
+    if (u?.type === 'player') bonus += geneticMod(u, 'atk') + geneticMod(u, 'def');
+  }
+  return 1 + 0.05 * bonus;
+}
 
 // Resolve a character's lifeId to its owning uid (null if not a real life).
 async function _lifeUid(db, lifeId) {
@@ -285,7 +297,7 @@ export function processSide({
   return { newSidePower, updatedCasualties };
 };
 
-export async function processBattle(worldId, chunkKey, tileKey, battleId, battle, ops, tile) {
+export async function processBattle(worldId, chunkKey, tileKey, battleId, battle, ops, tile, worldInfo = null) {
   try {
     // Use serverTimestamp for database records only
     const basePath = `worlds/${worldId}/chunks/${chunkKey}/${tileKey}/battles/${battleId}`;
@@ -311,24 +323,35 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     // Store individual group powers to avoid recalculating later
     const groupPowers = {};
 
-    // CRITICAL FIX: Safely access groups with defaults
     const side1Groups = side1.groups || {};
+    const side2Groups = side2.groups || {};
+
+    // Morale from morality: saints fight inspired, villains reviled. Fetch the
+    // combatants' standings in one query, then fold into group power.
+    const ownerUids = [];
+    for (const gid of [...Object.keys(side1Groups), ...Object.keys(side2Groups)]) {
+      const owner = tile.groups?.[gid]?.owner;
+      if (owner && owner !== 'monster') ownerUids.push(owner);
+    }
+    let moralityScores = {};
+    try { moralityScores = await moralityScoresFor(getDb(), worldId, ownerUids); } catch { /* neutral */ }
+    const moraleFactor = (group) =>
+      group?.owner && group.owner !== 'monster' ? moralityCombatFactor(moralityScores[group.owner]) : 1;
+
     for (const groupId in side1Groups) {
       if (tile.groups && tile.groups[groupId]) {
         const group = tile.groups[groupId];
-        const power = calculateGroupPower(group);
+        const power = calculateGroupPower(group) * geneticCombatFactor(group) * moraleFactor(group);
         groupPowers[groupId] = power;
         side1Power += power;
         console.log(`Side 1 Group ${groupId} calculated power: ${power}`);
       }
     }
 
-    // CRITICAL FIX: Safely access groups with defaults
-    const side2Groups = side2.groups || {};
     for (const groupId in side2Groups) {
       if (tile.groups && tile.groups[groupId]) {
         const group = tile.groups[groupId];
-        const power = calculateGroupPower(group);
+        const power = calculateGroupPower(group) * geneticCombatFactor(group) * moraleFactor(group);
         groupPowers[groupId] = power;
         side2Power += power;
         console.log(`Side 2 Group ${groupId} calculated power: ${power}`);
@@ -376,6 +399,8 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       const structureType = tile.structure.type;
       if (STRUCTURES[structureType]) {
         structurePower = STRUCTURES[structureType].durability || 0;
+        // A passed Public Works proposal (governance) reinforces defences realm-wide.
+        if (Number(worldInfo?.publicWorksUntil) > Date.now()) structurePower *= 1.25;
         side2Power += structurePower;
         console.log(`Structure power from ${structureType} durability: ${structurePower}`);
       }

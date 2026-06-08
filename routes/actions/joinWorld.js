@@ -6,10 +6,11 @@ import { incrementPlayerCount, getPlayerWorldData, setPlayerWorldData } from '..
 import { foundHouseForPlayer, requestToJoinHouse } from '../../db/houses.js';
 
 export async function joinWorld({ uid, data, db }) {
-  const { worldId, race, displayName, houseName, houseId, spawnPosition } = data;
+  const { worldId, race, sex, displayName, houseName, houseId, spawnPosition } = data;
 
   if (!worldId) throw err(400, 'worldId is required');
   if (!race)    throw err(400, 'race is required');
+  const chosenSex = sex === 'm' || sex === 'f' ? sex : 'f';
   if (displayName && (displayName.length < 2 || displayName.length > 20)) {
     throw err(400, 'displayName must be between 2 and 20 characters');
   }
@@ -32,6 +33,7 @@ export async function joinWorld({ uid, data, db }) {
   await setPlayerWorldData(db, uid, worldId, {
     joined: Date.now(),
     race,
+    sex: chosenSex, // remembered so the bound character is born with it
     alive: false,
     displayName: displayName || '',
     id: uid,

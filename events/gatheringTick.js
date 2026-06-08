@@ -6,11 +6,25 @@ import { merge } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { splitAndCreditStructure } from '../db/productionTax.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
+import { geneticMod } from 'gisaima-shared/lives/genetics.js';
+
+function _units(group) {
+  if (!group?.units) return [];
+  return Array.isArray(group.units) ? group.units : Object.values(group.units);
+}
+
+// Sum a genetic modifier across the group's player units (entities carry
+// ethnicity/trait, which mobilise copies onto the unit).
+function groupGeneticMod(group, key) {
+  return _units(group).reduce((sum, u) => sum + (u?.type === 'player' ? geneticMod(u, key) : 0), 0);
+}
 
 function groupCapacity(group) {
   if (!group.units) return 0;
-  const units = Array.isArray(group.units) ? group.units : Object.values(group.units);
-  return units.reduce((sum, u) => sum + (UNITS[u.type]?.carryCapacity ?? 5), 0);
+  const units = _units(group);
+  // Westmark/+carry ethnicity widens a character's load.
+  return units.reduce((sum, u) =>
+    sum + (UNITS[u.type]?.carryCapacity ?? 5) + (u?.type === 'player' ? geneticMod(u, 'carry') : 0), 0);
 }
 
 function groupItemCount(items) {
@@ -134,7 +148,9 @@ function generateGatheredItems(group, biome = 'plains', terrainRarity = 'common'
   const numGatherers   = group.units ? (Array.isArray(group.units) ? group.units.length : Object.keys(group.units).length) : 1;
   const baseItems      = Math.floor(Math.random() * 2) + Math.ceil(numGatherers / 2);
   const rarityMult     = { common: 1, uncommon: 1.25, rare: 1.5, epic: 1.75, legendary: 2, mythic: 2.5 };
-  const multiplier     = rarityMult[terrainRarity] || 1;
+  // Sylvan/+yield ethnicity (and yield traits) boost the haul by 10% each.
+  const yieldMult      = 1 + 0.1 * groupGeneticMod(group, 'yield');
+  const multiplier     = (rarityMult[terrainRarity] || 1) * yieldMult;
 
   function addItem(code, qty) {
     if (!code) return;

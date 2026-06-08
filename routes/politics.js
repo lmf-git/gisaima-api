@@ -1,12 +1,34 @@
 import { apiError } from '../core/auth.js';
-import { listOpenVotes, castVote, getCoffers } from '../db/politics.js';
+import { listOpenVotes, castVote, getCoffers, proposeVote } from '../db/politics.js';
+import { getWorldDoc } from '../db/worlds.js';
 
 export async function getPolitics(db, worldId) {
-  const [votes, coffers] = await Promise.all([
+  const [votes, coffers, world] = await Promise.all([
     listOpenVotes(db, worldId),
-    getCoffers(db, worldId)
+    getCoffers(db, worldId),
+    getWorldDoc(db, worldId)
   ]);
-  return { votes, coffers };
+  const now = Date.now();
+  const info = world?.info || {};
+  return {
+    votes,
+    coffers,
+    // Active treasury effects so the client can show the loop's payoff.
+    effects: {
+      festival: info.festivalUntil > now ? info.festivalUntil : null,
+      publicWorks: info.publicWorksUntil > now ? info.publicWorksUntil : null,
+      bountyPool: info.bountyPool || 0,
+    }
+  };
+}
+
+export async function postProposeVote(db, auth, worldId, body) {
+  try {
+    const vote = await proposeVote(db, worldId, auth.uid, body || {});
+    return { ok: true, vote };
+  } catch (e) {
+    throw apiError(400, e.message || 'could not create proposal');
+  }
 }
 
 export async function postVote(db, auth, worldId, voteId, body) {

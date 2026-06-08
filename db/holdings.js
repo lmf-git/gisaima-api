@@ -8,7 +8,7 @@ function _hasHarbour(structure) {
   const b = structure?.buildings || {};
   return Object.keys(b).some(k => {
     const key = k.toLowerCase();
-    return key.includes('harbour') || key.includes('harbor') || key.includes('dock') || key.includes('port');
+    return key.includes('harbour') || key.includes('dock') || key.includes('port');
   });
 }
 

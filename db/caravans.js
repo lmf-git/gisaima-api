@@ -23,6 +23,7 @@
  */
 import { ObjectId } from 'mongodb';
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { getFor as getMorality, moralityAmbushChance } from './morality.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { merge } from 'gisaima-shared/economy/items.js';
 import { pay } from './rewards.js';
@@ -148,7 +149,14 @@ export async function deliver(db, ops, worldId, group, atChunkKey, atTileKey) {
   const { items = {}, delivery } = group || {};
   if (!delivery) return null;
 
-  const intercepted = delivery.risk === 'caravan' && Math.random() < 0.1;
+  // Ambush risk scales with the caravan owner's morality — villains are preyed
+  // upon, saints sheltered.
+  let ambushChance = 0.1;
+  if (delivery.risk === 'caravan' && group.owner && group.owner !== 'monster') {
+    const score = (await getMorality(db, worldId, group.owner).catch(() => null))?.score ?? 0;
+    ambushChance = moralityAmbushChance(score, 0.1);
+  }
+  const intercepted = delivery.risk === 'caravan' && Math.random() < ambushChance;
   if (intercepted) {
     // Caravan ambushed — items go to the world coffers.
     const total = Object.values(items).reduce((a, b) => a + (Number(b) || 0), 0);

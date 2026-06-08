@@ -49,9 +49,15 @@ export async function currentLife(db, worldId, uid) {
   return db.collection('lives').findOne({ worldId, uid, died: null });
 }
 
-export async function birth(db, { worldId, uid, name, race = 'human', parentLifeId = null, makeControlled = true }) {
+export async function birth(db, { worldId, uid, name, race = 'human', sex = null, ethnicity = null, trait = null, parentLifeId = null, makeControlled = true }) {
   const insert = {
     worldId, uid, name, race,
+    // Founding characters get a chosen sex and a randomly-assigned ethnicity &
+    // trait so the genetics layer (sight/carry/combat) applies to them too, and
+    // so they can pass heritage to heirs.
+    sex: sex === 'm' || sex === 'f' ? sex : SEX_OPTIONS[Math.floor(Math.random() * SEX_OPTIONS.length)],
+    ethnicity: ethnicity || _randomEthnicity(),
+    trait: trait || _randomTrait(),
     born: new Date(),
     bornTick: await worldTick(db, worldId),
     died: null,
@@ -62,6 +68,7 @@ export async function birth(db, { worldId, uid, name, race = 'human', parentLife
     alive: false,            // becomes true once spawned onto the map
     lastLocation: null,
     inGroup: null,
+    spouseLifeId: null,      // set by the marry action
     parentLifeId: parentLifeId ? new ObjectId(parentLifeId) : null
   };
   const r = await db.collection('lives').insertOne(insert);
@@ -100,10 +107,10 @@ export async function setControlled(db, worldId, uid, lifeId) {
 
 // Ensure a legacy player (joined before the lives binding existed) has at least
 // one bound, active life and a controlledLifeId. Idempotent.
-export async function ensureBoundLife(db, worldId, uid, { name, race = 'human' } = {}) {
+export async function ensureBoundLife(db, worldId, uid, { name, race = 'human', sex = null } = {}) {
   const existing = await db.collection('lives').findOne({ worldId, uid, active: true, died: null });
   if (existing) return existing;
-  return birth(db, { worldId, uid, name: name || `Wanderer ${String(uid).slice(0, 4)}`, race, makeControlled: true });
+  return birth(db, { worldId, uid, name: name || `Wanderer ${String(uid).slice(0, 4)}`, race, sex, makeControlled: true });
 }
 
 export async function addDeath(db, worldId, uid, { cause = 'unknown', by = null, at = new Date(), inventory = null, location = null } = {}) {
@@ -333,6 +340,10 @@ function _hash(s) {
   return h >>> 0;
 }
 
+const TRAIT_POOL = ['steadfast', 'quick', 'cautious', 'cunning', 'kind', 'wrathful'];
+function _randomEthnicity() { return ETHNICITIES[Math.floor(Math.random() * ETHNICITIES.length)].key; }
+function _randomTrait()     { return TRAIT_POOL[Math.floor(Math.random() * TRAIT_POOL.length)]; }
+
 function _pickEthnicity(parents) {
   if (!parents?.length) return ETHNICITIES[0].key;
   // Blend rule: child gets one parent's ethnicity unless both share it.
@@ -357,11 +368,61 @@ function _howManyChildren() {
   return 1;
 }
 
+// Same-tile check used for marriage and reproduction. Two characters "together"
+// — whether mobilised in one group or demobilised at the same structure — share
+// a tile, so co-location reduces to equal lastLocation.
+function _sameTile(a, b) {
+  return a?.lastLocation && b?.lastLocation &&
+    a.lastLocation.x === b.lastLocation.x &&
+    a.lastLocation.y === b.lastLocation.y;
+}
+
+/**
+ * Marry two living characters who are together on the same tile. Sets a mutual
+ * `spouseLifeId`. The caller must own at least one of the two. Returns the
+ * location and (if any) the structure where the wedding takes place so the
+ * route can announce a wedding event.
+ */
+export async function marry(db, worldId, callerUid, lifeIdA, lifeIdB) {
+  if (!lifeIdA || !lifeIdB || String(lifeIdA) === String(lifeIdB)) {
+    throw new Error('two different characters are required');
+  }
+  const a = await db.collection('lives').findOne({ _id: new ObjectId(lifeIdA), worldId });
+  const b = await db.collection('lives').findOne({ _id: new ObjectId(lifeIdB), worldId });
+  if (!a || !b) throw new Error('character not found');
+  if (a.died || b.died) throw new Error('a character has died');
+  if (!a.alive || !b.alive) throw new Error('both characters must be on the map');
+  if (callerUid !== a.uid && callerUid !== b.uid) throw new Error('you must own one of the characters');
+  if (a.spouseLifeId || b.spouseLifeId) throw new Error('a character is already married');
+  if (!_sameTile(a, b)) throw new Error('the couple must be together on the same tile');
+
+  await db.collection('lives').updateOne({ _id: a._id }, { $set: { spouseLifeId: b._id, marriedAt: new Date() } });
+  await db.collection('lives').updateOne({ _id: b._id }, { $set: { spouseLifeId: a._id, marriedAt: new Date() } });
+
+  const { x, y } = a.lastLocation;
+  const chunkKey = getChunkKey(x, y);
+  const chunkDoc = await db.collection('chunks').findOne(
+    { worldId, chunkKey }, { projection: { [`tiles.${x},${y}.structure.name`]: 1, [`tiles.${x},${y}.structure.type`]: 1 } }
+  );
+  const structure = chunkDoc?.tiles?.[`${x},${y}`]?.structure || null;
+  return { ok: true, location: { x, y }, structureName: structure?.name || null, names: [a.name, b.name] };
+}
+
 export async function reproduce(db, worldId, parentLifeIds = []) {
   if (!parentLifeIds.length) throw new Error('at least one parent required');
   const _ids = parentLifeIds.map((id) => new ObjectId(id));
   const parents = await db.collection('lives').find({ _id: { $in: _ids } }).toArray();
   if (!parents.length) throw new Error('parents not found');
+
+  // Reproduction with two parents requires them to be married to each other and
+  // together on the same tile (in one group or demobilised at one structure).
+  if (parents.length >= 2) {
+    const [p0, p1] = parents;
+    const married = String(p0.spouseLifeId || '') === String(p1._id) &&
+                    String(p1.spouseLifeId || '') === String(p0._id);
+    if (!married) throw new Error('parents must be married to each other');
+    if (!_sameTile(p0, p1)) throw new Error('parents must be together on the same tile');
+  }
 
   const ethnicity = _pickEthnicity(parents);
   const trait     = _pickTrait(parents);

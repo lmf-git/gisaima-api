@@ -20,7 +20,16 @@
  * never accumulate without bound.
  */
 import { merge } from 'gisaima-shared/economy/items.js';
+import { BUILDINGS } from 'gisaima-shared/definitions/BUILDINGS.js';
 import { applyProductionTax } from '../db/productionTax.js';
+
+// Which defined building bonus scales each producer's passive yield. The bonus
+// is cumulative across levels (see BUILDINGS.getCumulativeBonuses) and applied
+// as a multiplier (1 + bonus), so a mine at L4 with miningYield 0.3 yields ×1.3.
+const YIELD_BONUS_KEY = {
+  mine: 'miningYield',
+  farm: 'farmingYield',
+};
 
 // Produce once every N ticks rather than every tick — keeps the economy slow.
 const PRODUCTION_INTERVAL = 5;
@@ -28,23 +37,30 @@ const PRODUCTION_INTERVAL = 5;
 // Per-item storage ceiling for passive production, scaled by structure level.
 const STORAGE_CAP_PER_LEVEL = 200;
 
+// Each entry: [itemCode, base, perLevel, minLevel?]. minLevel gates rare outputs
+// behind the building level that "unlocks" them in BUILDINGS.benefits, so a
+// levelled Mine actually starts yielding gold/silver (L3) and mithril/adamantite
+// (L5) rather than that only being a flavour string.
 const BUILDING_OUTPUT = {
-  mine:     [['METAL_ORE',       1, 0.34], ['STONE', 1, 0.5]],
-  quarry:   [['STONE',   1, 0.5]],
-  lumberyard: [['WOOD', 1, 0.5]],
+  mine:     [
+    ['METAL_ORE',  1, 0.34],
+    ['STONE',      1, 0.5],
+    ['GOLD_ORE',   1, 0.2,  3],
+    ['SILVER_ORE', 1, 0.2,  3],
+    ['MITHRIL_ORE', 1, 0.1, 5],
+    ['ADAMANTITE',  1, 0.0, 5],
+  ],
   farm:     [['WHEAT',          1, 0.5], ['BERRIES',     1, 0.25]],
   smithy:   [['CRUDE_WEAPON',   1, 0.2]],
   workshop: [['WOOD',  1, 0.34]],
   market:   [], // commerce, not passive minting — no GOLD here
-  stable:   [['LEATHER',        1, 0.2]],
   barracks: [], // produces via the recruit queue, not passively
   wall:     [],
   academy:  [],
   harbour:  [],
-  port:     []
 };
 
-function _outputFor(buildings) {
+function _outputFor(buildings, globalMult = 1) {
   const out = {};
   if (!buildings) return out;
   // buildings may be { type: { level }, ... } or [{ type, level }, ...]
@@ -55,8 +71,13 @@ function _outputFor(buildings) {
     const recipe = BUILDING_OUTPUT[b.type];
     if (!recipe?.length) continue;
     const level = Math.max(1, Number(b.level) || 1);
-    for (const [key, base, perLevel] of recipe) {
-      const qty = Math.floor(base + perLevel * (level - 1));
+    // Scale yield by the building's defined cumulative bonus for its level, so
+    // levelling a mine/farm actually increases output through the real bonus.
+    const bonusKey = YIELD_BONUS_KEY[b.type];
+    const yieldMult = bonusKey ? 1 + BUILDINGS.getBonusValue(b.type, level, bonusKey) : 1;
+    for (const [key, base, perLevel, minLevel] of recipe) {
+      if (minLevel && level < minLevel) continue; // rare output gated by building level
+      const qty = Math.floor((base + perLevel * (level - 1)) * yieldMult * globalMult);
       if (qty > 0) out[key] = (out[key] || 0) + qty;
     }
   }
@@ -69,7 +90,7 @@ function _outputFor(buildings) {
  *
  * Returns counts: { produced, taxed (gold-equivalent units), structures }
  */
-export async function processStructureProduction(db, worldId, chunks, ops, tickCount = 0) {
+export async function processStructureProduction(db, worldId, chunks, ops, tickCount = 0, productionMultiplier = 1) {
   let producedStructures = 0;
   let totalTaxed = 0;
   const cofferDelta = {};
@@ -86,7 +107,7 @@ export async function processStructureProduction(db, worldId, chunks, ops, tickC
       if (s.status === 'ruin' || s.abandoned) continue;
       if (!s.buildings) continue;
 
-      const output = _outputFor(s.buildings);
+      const output = _outputFor(s.buildings, productionMultiplier);
       if (!Object.keys(output).length) continue;
 
       const { kept, taxed } = applyProductionTax(output, s.taxes || {});

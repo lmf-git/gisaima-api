@@ -12,6 +12,7 @@ import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
 import { refreshIfStale } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
+import { isNight } from 'gisaima-shared/time/era.js';
 
 import { mergeWorldMonsterGroups, monsterSpawnTick, spawnMonsters } from '../events/monsterSpawnTick.js';
 import { processStarvation }       from '../events/starvationTick.js';
@@ -23,6 +24,8 @@ import { processGathering }        from '../events/gatheringTick.js';
 import { processBuilding }         from '../events/buildTick.js';
 import { upgradeTickProcessor }    from '../events/upgradeTick.js';
 import { processCrafting }         from '../events/craftingTick.js';
+import { processResearch }         from '../events/researchTick.js';
+import { processSpawnGuards }       from '../events/spawnGuardTick.js';
 import { processMonsterStrategies }from '../events/monsterStrategyTick.js';
 import { processRecruitment }      from '../events/recruitmentTick.js';
 
@@ -216,7 +219,7 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
       for (const battleId in tile.battles) {
         const battle = tile.battles[battleId];
         if (!battle) continue;
-        await processBattle(worldId, chunkKey, tileKey, battleId, battle, ops, tile);
+        await processBattle(worldId, chunkKey, tileKey, battleId, battle, ops, tile, worldInfo);
         for (const side of ['side1', 'side2']) {
           if (battle[side]?.groups) {
             Object.keys(battle[side].groups).forEach(gid =>
@@ -295,10 +298,28 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   mark('upgrades');
   await processCrafting(worldId, worldData, db);
   mark('crafting');
+  await processResearch(worldId, worldData, db);
+  mark('research');
+  // Spawn guardians muster against evil intruders on spawn tiles (battle resolves
+  // next tick). Uses post-flush chunk state via a fresh ops batch.
+  try {
+    const guardOps = new Ops();
+    const gr = await processSpawnGuards(worldId, chunks, guardOps, db);
+    await guardOps.flush(db);
+    if (gr.mustered > 0) console.log(`[tick] ${worldId} spawn guardians mustered: ${gr.mustered}`);
+  } catch (err) {
+    console.error(`[tick] spawnGuards ${worldId}:`, err);
+  }
+  mark('spawnGuards');
 
-  if (Math.random() < 0.666) await processMonsterStrategies(worldId, chunks, terrainGenerator, db);
+  // Nocturnal surge: monsters roam and spawn more aggressively at night so the
+  // day/night clock has real teeth rather than being a cosmetic tint.
+  const night = isNight(worldInfo.tickCount);
+  const strategyChance = night ? 0.85 : 0.666;
+  const spawnChance    = night ? 0.4  : 0.2;
+  if (Math.random() < strategyChance) await processMonsterStrategies(worldId, chunks, terrainGenerator, db);
   mark('monsterStrategies');
-  if (Math.random() < 0.2)   await spawnMonsters(worldId, chunks, terrainGenerator, db);
+  if (Math.random() < spawnChance)    await spawnMonsters(worldId, chunks, terrainGenerator, db);
   mark('spawnMonsters');
   if (Math.random() < 0.15)  await mergeWorldMonsterGroups(worldId, chunks, terrainGenerator, db);
   mark('mergeMonsters');
@@ -306,7 +327,12 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   // --- Structure passive production + tax skim ---
   try {
     const prodOps = new Ops();
-    const r = await processStructureProduction(db, worldId, chunks, prodOps, worldInfo.tickCount);
+    // A passed Festival proposal (governance) boosts passive production for a
+    // time — this is the visible payoff that closes the tax → coffers → vote →
+    // spend loop.
+    const festivalActive = Number(worldInfo.festivalUntil) > now;
+    const productionMultiplier = festivalActive ? 1.5 : 1;
+    const r = await processStructureProduction(db, worldId, chunks, prodOps, worldInfo.tickCount, productionMultiplier);
     await prodOps.flush(db);
     if (r.producedStructures > 0 || r.totalTaxed > 0) {
       console.log(`[tick] ${worldId} production: ${r.producedStructures} structures · ${r.totalTaxed} gold to coffers`);

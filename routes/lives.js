@@ -1,5 +1,6 @@
 import { apiError } from '../core/auth.js';
 import * as lives from '../db/lives.js';
+import { Ops } from '../lib/ops.js';
 
 export async function getMine(db, worldId, uid) {
   if (!uid) return { items: [] };
@@ -40,6 +41,30 @@ export async function postReproduce(db, auth, worldId, body) {
   }
   try {
     return await lives.reproduce(db, worldId, body.parentLifeIds);
+  } catch (e) {
+    throw apiError(400, e.message);
+  }
+}
+
+export async function postMarry(db, auth, worldId, body) {
+  if (!body?.lifeIdA || !body?.lifeIdB) throw apiError(400, 'lifeIdA and lifeIdB required');
+  try {
+    const r = await lives.marry(db, worldId, auth.uid, body.lifeIdA, body.lifeIdB);
+    // Announce the wedding — a celebration at the structure if held at one.
+    const ops = new Ops();
+    const [n1, n2] = r.names;
+    ops.chat(worldId, {
+      location: r.location,
+      text: r.structureName
+        ? `💍 A wedding at ${r.structureName}: ${n1} and ${n2} are wed!`
+        : `💍 ${n1} and ${n2} are wed beneath the open sky!`,
+      timestamp: Date.now(),
+      type: 'event',
+      category: 'player',
+      userId: auth.uid,
+    });
+    await ops.flush(db);
+    return { ok: true, ...r };
   } catch (e) {
     throw apiError(400, e.message);
   }

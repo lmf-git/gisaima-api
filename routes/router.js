@@ -15,7 +15,7 @@ import { getFriends, getFriendRequests, postFriendRequest,
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
-import { getPolitics, postVote }                        from './politics.js';
+import { getPolitics, postVote, postProposeVote }       from './politics.js';
 import * as morality  from './morality.js';
 import * as ransom    from './ransom.js';
 import * as trails    from './trails.js';
@@ -56,6 +56,7 @@ import spawnPlayer           from './actions/spawnPlayer.js';
 import startBuildingUpgrade  from './actions/startBuildingUpgrade.js';
 import startCrafting         from './actions/startCrafting.js';
 import startGathering        from './actions/startGathering.js';
+import startResearch         from './actions/startResearch.js';
 import startStructureUpgrade from './actions/startStructureUpgrade.js';
 import unloadGroup           from './actions/unloadGroup.js';
 import setStructureTaxes     from './actions/setStructureTaxes.js';
@@ -198,6 +199,7 @@ export async function route(db, req, body) {
   }
 
   // Politics
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && !s4)              return postProposeVote(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && s4)               return postVote(db, auth, s2, s4, body);
 
   // Authed gameplay reads (ransoms / trails / loans / stats — scoped to the caller)
@@ -241,6 +243,7 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'control')    return lives.postControl(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'respawn')    return lives.postRespawn(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'reproduce')  return lives.postReproduce(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'marry')      return lives.postMarry(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && !s4)                 return lives.postBirth(db, auth, s2, body);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'reports' && !s4)               return getReports(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'reports' && s4)                return postReportRead(db, auth, s2, s4);
@@ -273,6 +276,7 @@ export async function route(db, req, body) {
     if (s2 === 'startBuildingUpgrade')  return startBuildingUpgrade(ctx);
     if (s2 === 'startCrafting')         return startCrafting(ctx);
     if (s2 === 'startGathering')        return startGathering(ctx);
+    if (s2 === 'startResearch')         return startResearch(ctx);
     if (s2 === 'startStructureUpgrade') return startStructureUpgrade(ctx);
     if (s2 === 'unloadGroup')           return unloadGroup(ctx);
     if (s2 === 'setStructureTaxes')     return setStructureTaxes(ctx);

@@ -35,7 +35,8 @@ export async function spawnPlayer({ uid, data, db }) {
   } else {
     life = await ensureBoundLife(db, worldId, uid, {
       name: playerData.displayName || uid.substring(0, 8),
-      race: playerData.race || 'human'
+      race: playerData.race || 'human',
+      sex: playerData.sex || null
     });
   }
 
@@ -49,7 +50,7 @@ export async function spawnPlayer({ uid, data, db }) {
 
   const ops = new Ops();
   ops.chunk(worldId, chunkKey, `${tileKey}.players.${entityId}`,
-    makePlayerEntity({ lifeId: entityId, uid, displayName, race }));
+    makePlayerEntity({ lifeId: entityId, uid, displayName, race, ethnicity: life.ethnicity || null, trait: life.trait || null }));
   await ops.flush(db);
 
   // Mark the character placed + make it the controlled one.

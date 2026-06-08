@@ -29,6 +29,12 @@ export async function recruitUnits({ uid, data, db }) {
     throw err(409, `This structure cannot recruit ${unitDef.race} units`);
   }
 
+  // Authoritative requirement enforcement (structure level/type, building
+  // level, research). The client only uses these to grey out options; without
+  // this a crafted request could recruit elite units at a basic shelter.
+  const reqCheck = Units.checkRecruitRequirements(structure, unitType);
+  if (!reqCheck.ok) throw err(409, reqCheck.reason);
+
   const isOwned = structure.owner === uid;
   const allowed = await canUse({ db, worldId, structure, uid, action: 'recruit' });
   if (!allowed) throw err(403, 'You do not have permission to recruit at this structure');

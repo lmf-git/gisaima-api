@@ -78,8 +78,8 @@ export function hasHarbour(structure) {
   const b = structure?.buildings || {};
   return Object.keys(b).some(k => {
     const key = k.toLowerCase();
-    return key.includes('harbour') || key.includes('harbor') || key.includes('dock') || key.includes('port');
-  }) || ['harbour', 'harbor', 'port', 'dock'].some(k => b[k]);
+    return key.includes('harbour') || key.includes('dock') || key.includes('port');
+  }) || ['harbour', 'port', 'dock'].some(k => b[k]);
 }
 
 // Naval only when BOTH ends are ports — a ship needs a harbour to sail from and

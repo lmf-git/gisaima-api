@@ -4,6 +4,7 @@
  */
 
 import { BUILDINGS } from 'gisaima-shared';
+import { STRUCTURES, promotedStructureType } from 'gisaima-shared/definitions/STRUCTURES.js';
 import { Ops } from '../lib/ops.js';
 
 export const upgradeTickProcessor = processUpgrades;
@@ -57,18 +58,36 @@ async function applyUpgrade(worldId, upgrade, worldData, db, now) {
   if (!structure) throw new Error('Structure not found in provided world data');
   if ((structure.level || 1) !== fromLevel) throw new Error('Structure level mismatch');
 
+  // Tiered promotion: a base on the defensive ladder changes type at level
+  // thresholds (shelter → fortress → stronghold → citadel) rather than merely
+  // gaining a level. The new type carries its own name/bonuses/sight/capacity.
+  const newType = promotedStructureType(structure.type, toLevel);
+  const tierDef = newType ? STRUCTURES[newType] : null;
+
   const updatedStructure = {
     ...structure,
+    ...(tierDef ? {
+      type: newType,
+      // Keep a custom/player name if one was set; otherwise adopt the tier name.
+      name: (structure.name && structure.name !== STRUCTURES[structure.type]?.name)
+        ? structure.name : tierDef.name,
+      bonuses: { ...(structure.bonuses || {}), ...(tierDef.bonuses || {}) },
+      ...(tierDef.sightRange ? { sightRange: tierDef.sightRange } : {})
+    } : {}),
     level: toLevel,
     upgradeInProgress: false,
     upgradeId: null,
     upgradeCompletesAt: null,
     lastUpgraded: now,
-    features: [
+    features: dedupeFeatures([
       ...(structure.features || []),
-      ...getNewFeaturesForLevel(structure.type, toLevel)
-    ],
-    ...(structure.capacity ? { capacity: Math.floor(structure.capacity * 1.2) } : {})
+      ...(tierDef ? (tierDef.features || []) : []),
+      ...getNewFeaturesForLevel(newType || structure.type, toLevel)
+    ]),
+    // On promotion adopt the tier's larger capacity; otherwise grow the existing.
+    ...(tierDef?.capacity
+      ? { capacity: Math.max(tierDef.capacity, Math.floor((structure.capacity || 0) * 1.2)) }
+      : (structure.capacity ? { capacity: Math.floor(structure.capacity * 1.2) } : {}))
   };
 
   const [x, y] = tileKey.split(',').map(Number);
@@ -80,7 +99,9 @@ async function applyUpgrade(worldId, upgrade, worldData, db, now) {
   ops.world(worldId, `upgrades.${upgrade.id}.status`,     'completed');
   ops.chat(worldId, {
     location: { x, y },
-    text: `A structure at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
+    text: tierDef
+      ? `A structure at (${x}, ${y}) has risen to a ${tierDef.name} (level ${toLevel})!`
+      : `A structure at (${x}, ${y}) has been upgraded to level ${toLevel}!`,
     timestamp: now,
     type: 'system',
     category: 'player'
@@ -143,6 +164,17 @@ async function applyBuildingUpgrade(worldId, upgrade, worldData, db, now) {
 
   await ops.flush(db);
   return { success: true, building: updatedBuilding };
+}
+
+// Collapse features to one per name, keeping the last occurrence so a tier's
+// definition wins over an older same-named feature.
+function dedupeFeatures(features) {
+  const byName = new Map();
+  for (const f of features) {
+    if (!f?.name) continue;
+    byName.set(f.name, f);
+  }
+  return [...byName.values()];
 }
 
 function getNewFeaturesForLevel(type, level) {

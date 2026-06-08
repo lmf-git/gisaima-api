@@ -1,5 +1,8 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { ITEMS, getRecipeById } from 'gisaima-shared/definitions/ITEMS.js';
+import { BUILDINGS } from 'gisaima-shared/definitions/BUILDINGS.js';
+import { geneticMod } from 'gisaima-shared/lives/genetics.js';
+import { getLife } from '../../db/lives.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
 import { grantAchievement } from '../../lib/achievements.js';
@@ -69,14 +72,21 @@ export async function startCrafting({ uid, data, db }) {
   }
 
   let modifier = 1.0 - Math.min(0.5, (craftingLevel - 1) * 0.05);
+  // Apply the required building's defined craftingSpeed bonus (cumulative for its
+  // level) — sourced from the BUILDINGS definition, since stored building objects
+  // don't carry a per-level benefits array.
   if (recipe.requiredBuilding && structure.buildings) {
     for (const b of Object.values(structure.buildings)) {
       if (b.type === recipe.requiredBuilding.type) {
-        for (const ben of (b.benefits || [])) {
-          if (ben.bonus?.craftingSpeed) modifier -= ben.bonus.craftingSpeed;
-        }
+        modifier -= BUILDINGS.getBonusValue(b.type, b.level || 1, 'craftingSpeed');
       }
     }
+  }
+  // Asari/+craft ethnicity (and craft traits) of the controlling character speed
+  // the work by 5% each.
+  if (player.controlledLifeId) {
+    const life = await getLife(db, worldId, uid, player.controlledLifeId).catch(() => null);
+    if (life) modifier -= 0.05 * geneticMod(life, 'craft');
   }
   modifier = Math.max(0.1, modifier);
   const finalTicks = Math.max(1, Math.ceil((recipe.ticksRequired || 1) * modifier));
