@@ -10,6 +10,9 @@ export async function getRankings(db, worldId) {
           _id: 1,
           [`worlds.${worldId}.displayName`]: 1,
           [`worlds.${worldId}.kills`]: 1,
+          [`worlds.${worldId}.gold`]: 1,
+          [`worlds.${worldId}.distance`]: 1,
+          [`worlds.${worldId}.hideFromRankings`]: 1,
           [`worlds.${worldId}.houseId`]: 1,
           [`worlds.${worldId}.houseName`]: 1,
       } }
@@ -42,10 +45,17 @@ export async function getRankings(db, worldId) {
       houseId:         wd.houseId || null,
       houseName:       wd.houseName || null,
       kills:           wd.kills || 0,
+      wealth:          wd.gold || 0,
+      distance:        wd.distance || 0,
+      hidden:          wd.hideFromRankings === true,
       structureCount:  ss.count,
       structurePoints: ss.points,
     };
   });
+
+  // Privacy — players who opted out are anonymised in the public boards (the
+  // notes ask for "rankings for wealth unless player hides name").
+  const publicRows = rows.map(r => r.hidden ? { ...r, uid: null, displayName: 'Anonymous' } : r);
 
   // House rows — sum the stats of every sworn member. Players with no house are
   // omitted. Keyed by houseId when present, falling back to houseName.
@@ -106,9 +116,11 @@ export async function getRankings(db, worldId) {
 
   return {
     // By player
-    kills:            top(rows, 'kills'),
-    structures:       top(rows, 'structureCount'),
-    points:           top(rows, 'structurePoints'),
+    kills:            top(publicRows, 'kills'),
+    structures:       top(publicRows, 'structureCount'),
+    points:           top(publicRows, 'structurePoints'),
+    wealth:           top(publicRows, 'wealth'),
+    distance:         top(publicRows, 'distance'),
     // By tribe
     tribeKills:       top(tribeRows, 'kills'),
     tribeStructures:  top(tribeRows, 'structureCount'),

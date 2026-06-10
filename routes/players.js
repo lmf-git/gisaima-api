@@ -33,3 +33,13 @@ export async function getPlayerWorldState(db, auth, userId, worldId) {
     pendingHouseRequest: pendingRequest, // { houseId, houseName } | null
   };
 }
+
+/** Toggle ranking privacy — anonymises the caller on public leaderboards. */
+export async function postRankingPrivacy(db, auth, worldId, body) {
+  const hide = body?.hide === true;
+  await db.collection('players').updateOne(
+    { _id: auth.uid },
+    { $set: { [`worlds.${worldId}.hideFromRankings`]: hide } }
+  );
+  return { ok: true, hideFromRankings: hide };
+}

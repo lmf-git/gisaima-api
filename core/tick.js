@@ -26,11 +26,13 @@ import { upgradeTickProcessor }    from '../events/upgradeTick.js';
 import { processCrafting }         from '../events/craftingTick.js';
 import { processResearch }         from '../events/researchTick.js';
 import { processSpawnGuards }       from '../events/spawnGuardTick.js';
+import { processSieges }            from '../events/siegeTick.js';
 import { processMonsterStrategies }from '../events/monsterStrategyTick.js';
 import { processRecruitment }      from '../events/recruitmentTick.js';
 
 // New per-domain tick hooks
-import { tickClosure as tickVoteClosure } from '../db/politics.js';
+import { tickClosure as tickVoteClosure, tickElections } from '../db/politics.js';
+import { tickTrials }                      from '../db/morality.js';
 import { tick as tickBanks }              from '../db/banks.js';
 import { progressTrails }                 from '../db/trails.js';
 import { tickTradeRoutes }                 from '../db/tradeRoutes.js';
@@ -233,11 +235,22 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
 
   mark('battles');
 
+  // --- Pass 1b: sieges (hostile groups camped on structures, no open battle) ---
+  processSieges(worldId, ops, chunks, now);
+  mark('sieges');
+
   // --- Pass 2: group activities ---
   for (const chunkKey in chunks) {
     const chunk = chunks[chunkKey];
     for (const tileKey in chunk) {
       const tile = chunk[tileKey];
+
+      // Abundance recovery — tiles worn down by gathering creep back to full
+      // (gatheringTick depletes by 0.15 per harvest, floor 0.2).
+      if (typeof tile.abundance === 'number' && tile.abundance < 1) {
+        ops.chunk(worldId, chunkKey, `${tileKey}.abundance`,
+          Math.min(1, +(tile.abundance + 0.02).toFixed(3)));
+      }
 
       if (tile.structure?.status === 'building') {
         await processBuilding(worldId, ops, chunkKey, tileKey, tile, now);
@@ -348,6 +361,18 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
     if (closed > 0) console.log(`[tick] ${worldId} closed ${closed} expired votes`);
   } catch (err) {
     console.error(`[tick] vote closure ${worldId}:`, err);
+  }
+  try {
+    const seated = await tickElections(db, worldId, new Date(now));
+    if (seated > 0) console.log(`[tick] ${worldId} closed ${seated} election(s)`);
+  } catch (err) {
+    console.error(`[tick] elections ${worldId}:`, err);
+  }
+  try {
+    const verdicts = await tickTrials(db, worldId, new Date(now));
+    if (verdicts > 0) console.log(`[tick] ${worldId} delivered ${verdicts} trial verdict(s)`);
+  } catch (err) {
+    console.error(`[tick] trials ${worldId}:`, err);
   }
   try {
     const bankResult = await tickBanks(db, worldId);

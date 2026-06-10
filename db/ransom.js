@@ -15,6 +15,7 @@ import { ObjectId } from 'mongodb';
 import { addDeath } from './lives.js';
 import { Ops } from '../lib/ops.js';
 import { charge, pay } from './rewards.js';
+import { settleCaptivity } from './captives.js';
 
 export async function listFor(db, worldId, uid) {
   return db.collection('ransom_offers')
@@ -61,10 +62,13 @@ async function settle(db, ransom) {
         $push: { history: { at: new Date(), by: captorUid, action: 'defaulted' } }
       }
     );
+    await settleCaptivity(db, worldId, captiveUid, 'executed', 'ransom-default').catch(() => {});
     return { defaulted: true };
   }
   await pay(db, ops, worldId, captorUid, { GOLD: amount });
   await ops.flush(db);
+  // A paid ransom frees the captive.
+  await settleCaptivity(db, worldId, captiveUid, 'released', 'ransom-paid').catch(() => {});
   return { paid: amount };
 }
 

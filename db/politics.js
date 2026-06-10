@@ -229,3 +229,173 @@ export async function tickClosure(db, worldId, now = new Date()) {
   }
   return closing.length;
 }
+
+// ── Elections (notes: SPAWN STRUCTURE POLITICS) ──────────────────────────────
+// Any player may call an election at a player-owned structure — this doubles
+// as the vote of no confidence. Players then vote for a candidate (voting for
+// someone nominates them); when the election closes, stewardship of the
+// structure transfers to the winner. Ties keep the incumbent. A structure can
+// hold at most one open election, with a cooldown between elections.
+//
+// elections schema:
+//   _id, worldId, chunkKey, tileKey, location {x,y}, structureName,
+//   incumbentUid, calledBy, candidates { uid: name }, tallies { uid: n },
+//   voters { uid: candidateUid }, openedAt, closesAt, status 'open'|'closed',
+//   winnerUid?, outcome?
+
+const ELECTION_DURATION_MS = 60 * 60 * 1000;       // 1h
+const ELECTION_COOLDOWN_MS = 24 * 60 * 60 * 1000;  // one per structure per day
+
+export async function listOpenElections(db, worldId) {
+  const docs = await db.collection('elections')
+    .find({ worldId, status: 'open' })
+    .sort({ openedAt: -1 })
+    .limit(50)
+    .toArray();
+  return docs.map(d => ({
+    _id: d._id,
+    structureName: d.structureName,
+    location: d.location,
+    incumbentUid: d.incumbentUid,
+    closesAt: d.closesAt,
+    candidates: Object.entries(d.candidates || {}).map(([uid, name]) => ({
+      uid, name, count: d.tallies?.[uid] || 0
+    })),
+  }));
+}
+
+export async function callElection(db, worldId, uid, body = {}) {
+  const { getChunkKey } = await import('gisaima-shared/map/cartography.js');
+  const x = Number(body.x), y = Number(body.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('x and y required');
+
+  const chunkKey = getChunkKey(x, y);
+  const tileKey  = `${x},${y}`;
+  const chunk = await db.collection('chunks').findOne(
+    { worldId, chunkKey },
+    { projection: { [`tiles.${tileKey}.structure`]: 1 } }
+  );
+  const structure = chunk?.tiles?.[tileKey]?.structure;
+  if (!structure)        throw new Error('no structure on this tile');
+  if (!structure.owner || structure.monster) throw new Error('only player-held structures hold elections');
+  if (structure.type === 'ruins' || structure.status === 'building') {
+    throw new Error('this structure cannot hold an election');
+  }
+
+  const open = await db.collection('elections').findOne({ worldId, chunkKey, tileKey, status: 'open' });
+  if (open) throw new Error('an election is already under way here');
+
+  const recent = await db.collection('elections').findOne(
+    { worldId, chunkKey, tileKey, status: 'closed', closedAt: { $gte: new Date(Date.now() - ELECTION_COOLDOWN_MS) } }
+  );
+  if (recent) throw new Error('an election was held here recently — wait before calling another');
+
+  const now = new Date();
+  const doc = {
+    worldId,
+    chunkKey,
+    tileKey,
+    location: { x, y },
+    structureName: structure.name || structure.type,
+    incumbentUid: structure.owner,
+    calledBy: uid,
+    candidates: {},
+    tallies: {},
+    voters: {},
+    openedAt: now,
+    closesAt: new Date(now.getTime() + ELECTION_DURATION_MS),
+    status: 'open',
+  };
+  const r = await db.collection('elections').insertOne(doc);
+  return { _id: r.insertedId, ...doc };
+}
+
+export async function castElectionVote(db, electionId, uid, candidateUid) {
+  const _id = new ObjectId(electionId);
+  const doc = await db.collection('elections').findOne({ _id });
+  if (!doc || doc.status !== 'open') return null;
+  if (!candidateUid) throw new Error('candidateUid required');
+
+  // Voting for someone nominates them; resolve their display name lazily.
+  let candidateName = doc.candidates?.[candidateUid];
+  if (!candidateName) {
+    const p = await db.collection('players').findOne(
+      { _id: candidateUid },
+      { projection: { [`worlds.${doc.worldId}.displayName`]: 1 } }
+    );
+    candidateName = p?.worlds?.[doc.worldId]?.displayName || 'Unknown';
+  }
+
+  const prev = doc.voters?.[uid];
+  const $inc = { [`tallies.${candidateUid}`]: 1 };
+  const $set = {
+    [`voters.${uid}`]: candidateUid,
+    [`candidates.${candidateUid}`]: candidateName,
+  };
+  if (prev && prev !== candidateUid) $inc[`tallies.${prev}`] = -1;
+
+  const r = await db.collection('elections').findOneAndUpdate(
+    { _id }, { $inc, $set }, { returnDocument: 'after' }
+  );
+  return r.value || r;
+}
+
+/**
+ * Tick: close due elections and seat the winners. The candidate with the most
+ * votes takes stewardship of the structure; ties (or no votes) keep the
+ * incumbent. Returns the number of elections closed.
+ */
+export async function tickElections(db, worldId, now = new Date()) {
+  const closing = await db.collection('elections')
+    .find({ worldId, status: 'open', closesAt: { $lte: now } })
+    .toArray();
+  if (!closing.length) return 0;
+
+  const { Ops } = await import('../lib/ops.js');
+
+  for (const e of closing) {
+    const tallies = Object.entries(e.tallies || {}).filter(([, n]) => n > 0);
+    tallies.sort((a, b) => b[1] - a[1]);
+    const top = tallies[0];
+    const tied = top && tallies[1] && tallies[1][1] === top[1];
+    const winnerUid = top && !tied ? top[0] : e.incumbentUid;
+    const winnerName = e.candidates?.[winnerUid] || null;
+    const outcome = winnerUid === e.incumbentUid ? 'incumbent_holds' : 'unseated';
+
+    if (outcome === 'unseated') {
+      const ops = new Ops();
+      ops.chunk(e.worldId, e.chunkKey, `${e.tileKey}.structure.owner`, winnerUid);
+      ops.chunk(e.worldId, e.chunkKey, `${e.tileKey}.structure.ownerName`, winnerName);
+      ops.chat(e.worldId, {
+        text: `The people have spoken — ${winnerName || 'a new steward'} now governs ${e.structureName} at (${e.location.x}, ${e.location.y}).`,
+        type: 'event', timestamp: now.getTime(), location: e.location,
+      });
+      ops.report(e.incumbentUid, e.worldId, {
+        type: 'election_lost',
+        title: `Unseated at ${e.structureName}`,
+        summary: `You lost the election at ${e.structureName} (${e.location.x}, ${e.location.y}) to ${winnerName || 'a rival'}.`,
+        location: e.location,
+      });
+      ops.report(winnerUid, e.worldId, {
+        type: 'election_won',
+        title: `Elected at ${e.structureName}`,
+        summary: `You won the election at ${e.structureName} (${e.location.x}, ${e.location.y}) and now govern it.`,
+        location: e.location,
+      });
+      await ops.flush(db);
+    } else {
+      const ops = new Ops();
+      ops.chat(e.worldId, {
+        text: `The election at ${e.structureName} (${e.location.x}, ${e.location.y}) concludes — the incumbent steward holds power.`,
+        type: 'event', timestamp: now.getTime(), location: e.location,
+      });
+      await ops.flush(db);
+    }
+
+    await db.collection('elections').updateOne(
+      { _id: e._id },
+      { $set: { status: 'closed', closedAt: now, winnerUid, outcome } }
+    );
+  }
+  return closing.length;
+}

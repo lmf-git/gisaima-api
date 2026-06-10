@@ -2,7 +2,8 @@ import { handleGuestLogin, handleRegister, handleLogin, handleMe,
          requestEmailLogin, verifyEmailLogin,
          getAuth, apiError } from '../core/auth.js';
 import { getWorlds, getWorld, getChunk, getWorldChat } from './worlds.js';
-import { getPlayerWorlds, getPlayerWorldState }         from './players.js';
+import { getPlayerWorlds, getPlayerWorldState,
+         postRankingPrivacy }                           from './players.js';
 import { postChat }                                     from './chat.js';
 import { getReports, postReportRead }                   from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
@@ -15,7 +16,8 @@ import { getFriends, getFriendRequests, postFriendRequest,
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
-import { getPolitics, postVote, postProposeVote }       from './politics.js';
+import { getPolitics, postVote, postProposeVote,
+         postCallElection, postElectionVote }           from './politics.js';
 import * as morality  from './morality.js';
 import * as ransom    from './ransom.js';
 import * as trails    from './trails.js';
@@ -61,6 +63,9 @@ import startStructureUpgrade from './actions/startStructureUpgrade.js';
 import unloadGroup           from './actions/unloadGroup.js';
 import setStructureTaxes     from './actions/setStructureTaxes.js';
 import setStructureAccess    from './actions/setStructureAccess.js';
+import setRetreat            from './actions/setRetreat.js';
+import splitGroup            from './actions/splitGroup.js';
+import mergeGroups           from './actions/mergeGroups.js';
 
 export async function route(db, req, body) {
   const { method } = req;
@@ -200,11 +205,14 @@ export async function route(db, req, body) {
 
   // Politics
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && !s4)              return postProposeVote(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'elections' && !s4)             return postCallElection(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'elections' && s4)              return postElectionVote(db, auth, s2, s4, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && s4)               return postVote(db, auth, s2, s4, body);
 
   // Authed gameplay reads (ransoms / trails / loans / stats — scoped to the caller)
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'ransoms')                      return ransom.getList(db, s2, auth.uid);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'ransoms' && !s4)               return ransom.postProposal(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'ransoms' && s4 === 'release')  return ransom.postRelease(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'ransoms' && s4)                return ransom.postResponse(db, auth, s2, s4, body);
 
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'trails')                       return trails.getList(db, s2, auth.uid);
@@ -212,6 +220,9 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'trails' && s4)                 return trails.postSolve(db, auth, s2, s4, body);
 
   if (method === 'POST' && s1 === 'worlds' && s3 === 'morality')                     return morality.postAccusation(db, auth, s2, body);
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'trials' && !s4)                return morality.getTrials(db, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'trials' && !s4)                return morality.postTrial(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'trials' && s4)                 return morality.postTrialVote(db, auth, s2, s4, body);
 
   if (method === 'POST' && s1 === 'worlds' && s3 === 'currencies' && !s4)            return currency.postCreate(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'currencies' && s4)             return currency.postSetOfficial(db, auth, s2, s4, body);
@@ -251,6 +262,7 @@ export async function route(db, req, body) {
   // Players
   if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && !s4) return getPlayerWorlds(db, auth, s2);
   if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && s4)  return getPlayerWorldState(db, auth, s2, s4);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'rankingPrivacy') return postRankingPrivacy(db, auth, s2, body);
 
   // Actions
   if (method === 'POST' && s1 === 'actions') {
@@ -281,6 +293,9 @@ export async function route(db, req, body) {
     if (s2 === 'unloadGroup')           return unloadGroup(ctx);
     if (s2 === 'setStructureTaxes')     return setStructureTaxes(ctx);
     if (s2 === 'setStructureAccess')    return setStructureAccess(ctx);
+    if (s2 === 'setRetreat')            return setRetreat(ctx);
+    if (s2 === 'splitGroup')            return splitGroup(ctx);
+    if (s2 === 'mergeGroups')           return mergeGroups(ctx);
 
     throw apiError(404, `unknown action: ${s2}`);
   }

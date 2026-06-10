@@ -198,3 +198,161 @@ export async function applyKillEffect(db, worldId, killerUid, victimUid, locatio
   }
   return null;
 }
+
+// ── Trials (notes: "Morality points can be used in trials") ──────────────────
+// A player may put another on trial. The trial doc snapshots the accused's
+// best and worst acts (their accusation history) as evidence, then the realm
+// votes guilty/innocent over a window. A guilty verdict brands the accused
+// (−5 morality); an acquittal rebounds on the accuser (−2, false accusation).
+//
+// trials schema:
+//   _id, worldId, targetUid, targetName, accuserUid, charge,
+//   evidence { good: [...], evil: [...] }, tallies { guilty, innocent },
+//   voters { uid: choice }, openedAt, closesAt, status 'open'|'closed',
+//   verdict? 'guilty'|'acquitted'
+import { ObjectId } from 'mongodb';
+
+const TRIAL_DURATION_MS = 60 * 60 * 1000;       // 1h
+const TRIAL_COOLDOWN_MS = 24 * 60 * 60 * 1000;  // one trial per accused per day
+export const TRIAL_GUILTY_PENALTY = 5;
+export const TRIAL_FALSE_ACCUSER_PENALTY = 2;
+
+export async function listOpenTrials(db, worldId) {
+  const docs = await db.collection('trials')
+    .find({ worldId, status: 'open' })
+    .sort({ openedAt: -1 })
+    .limit(50)
+    .toArray();
+  return docs.map(d => ({
+    _id: d._id,
+    targetUid: d.targetUid,
+    targetName: d.targetName,
+    accuserUid: d.accuserUid,
+    charge: d.charge,
+    evidence: d.evidence,
+    closesAt: d.closesAt,
+    tallies: { guilty: d.tallies?.guilty || 0, innocent: d.tallies?.innocent || 0 },
+  }));
+}
+
+export async function startTrial(db, worldId, accuserUid, targetUid, charge = '') {
+  if (!targetUid) throw new Error('targetUid required');
+  if (accuserUid === targetUid) throw new Error('cannot put yourself on trial');
+
+  const open = await db.collection('trials').findOne({ worldId, targetUid, status: 'open' });
+  if (open) throw new Error('this player is already on trial');
+  const recent = await db.collection('trials').findOne({
+    worldId, targetUid, status: 'closed',
+    closedAt: { $gte: new Date(Date.now() - TRIAL_COOLDOWN_MS) }
+  });
+  if (recent) throw new Error('this player stood trial recently — wait before trying them again');
+
+  // Calling a trial spends one of the accuser's daily morality points.
+  const today = dayBucket();
+  const used = await db.collection('morality_accusations').countDocuments({ accuserUid, worldId, day: today });
+  const trialsToday = await db.collection('trials').countDocuments({ worldId, accuserUid, day: today });
+  if (used + trialsToday >= MORALITY_POINTS_PER_DAY) throw new Error('daily morality points exhausted');
+
+  // Evidence — the accused's best and worst recorded acts.
+  const acts = await history(db, worldId, targetUid, 5);
+  const trim = (a) => a.map(({ polarity, comment, reportRef, createdAt, accuserUid: by }) =>
+    ({ polarity, comment, reportRef, createdAt, by }));
+
+  const target = await db.collection('players').findOne(
+    { _id: targetUid },
+    { projection: { [`worlds.${worldId}.displayName`]: 1 } }
+  );
+
+  const now = new Date();
+  const doc = {
+    worldId,
+    targetUid,
+    targetName: target?.worlds?.[worldId]?.displayName || 'Unknown',
+    accuserUid,
+    charge: (charge || '').toString().slice(0, 300),
+    evidence: { good: trim(acts.good), evil: trim(acts.evil) },
+    tallies: { guilty: 0, innocent: 0 },
+    voters: {},
+    openedAt: now,
+    closesAt: new Date(now.getTime() + TRIAL_DURATION_MS),
+    status: 'open',
+    day: today,
+  };
+  const r = await db.collection('trials').insertOne(doc);
+  return { _id: r.insertedId, ...doc };
+}
+
+export async function castTrialVote(db, trialId, uid, choice) {
+  if (choice !== 'guilty' && choice !== 'innocent') throw new Error('choice must be guilty or innocent');
+  const _id = new ObjectId(trialId);
+  const doc = await db.collection('trials').findOne({ _id });
+  if (!doc || doc.status !== 'open') return null;
+  if (uid === doc.targetUid) throw new Error('the accused may not vote at their own trial');
+
+  const prev = doc.voters?.[uid];
+  const $inc = { [`tallies.${choice}`]: 1 };
+  const $set = { [`voters.${uid}`]: choice };
+  if (prev && prev !== choice) $inc[`tallies.${prev}`] = -1;
+
+  const r = await db.collection('trials').findOneAndUpdate(
+    { _id }, { $inc, $set }, { returnDocument: 'after' }
+  );
+  return r.value || r;
+}
+
+/**
+ * Tick: deliver verdicts on due trials. Guilty needs a strict majority with at
+ * least two guilty votes; otherwise the accused walks and the false accusation
+ * rebounds. Returns the number of trials closed.
+ */
+export async function tickTrials(db, worldId, now = new Date()) {
+  const closing = await db.collection('trials')
+    .find({ worldId, status: 'open', closesAt: { $lte: now } })
+    .toArray();
+  if (!closing.length) return 0;
+
+  const { Ops } = await import('../lib/ops.js');
+
+  for (const t of closing) {
+    const guilty = t.tallies?.guilty || 0;
+    const innocent = t.tallies?.innocent || 0;
+    const verdict = guilty >= 2 && guilty > innocent ? 'guilty' : 'acquitted';
+
+    const ops = new Ops();
+    if (verdict === 'guilty') {
+      await applyDelta(db, t.worldId, t.targetUid, 'evil', TRIAL_GUILTY_PENALTY);
+      ops.chat(t.worldId, {
+        text: `The realm finds ${t.targetName} GUILTY (${guilty}–${innocent}). Their name is blackened.`,
+        type: 'event', category: 'player', timestamp: now.getTime(),
+      });
+      ops.report(t.targetUid, t.worldId, {
+        type: 'trial_verdict',
+        title: 'Found Guilty',
+        summary: `The realm found you guilty (${guilty}–${innocent})${t.charge ? ` of: ${t.charge}` : ''}. Your morality suffers (−${TRIAL_GUILTY_PENALTY}).`,
+      });
+    } else {
+      await applyDelta(db, t.worldId, t.accuserUid, 'evil', TRIAL_FALSE_ACCUSER_PENALTY);
+      ops.chat(t.worldId, {
+        text: `${t.targetName} is acquitted (${innocent}–${guilty}) — the false accusation stains the accuser.`,
+        type: 'event', category: 'player', timestamp: now.getTime(),
+      });
+      ops.report(t.targetUid, t.worldId, {
+        type: 'trial_verdict',
+        title: 'Acquitted',
+        summary: `The realm acquitted you (${innocent}–${guilty}). Your accuser bears the shame.`,
+      });
+      ops.report(t.accuserUid, t.worldId, {
+        type: 'trial_verdict',
+        title: 'False Accusation',
+        summary: `${t.targetName} was acquitted — the realm marks your false accusation (−${TRIAL_FALSE_ACCUSER_PENALTY} morality).`,
+      });
+    }
+    await ops.flush(db);
+
+    await db.collection('trials').updateOne(
+      { _id: t._id },
+      { $set: { status: 'closed', closedAt: now, verdict } }
+    );
+  }
+  return closing.length;
+}

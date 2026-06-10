@@ -1,9 +1,24 @@
 import { apiError } from '../core/auth.js';
 import * as ransom from '../db/ransom.js';
+import * as captives from '../db/captives.js';
 
 export async function getList(db, worldId, uid) {
   if (!uid) return { items: [] };
-  return { items: await ransom.listFor(db, worldId, uid) };
+  return {
+    items: await ransom.listFor(db, worldId, uid),
+    captives: await captives.listFor(db, worldId, uid),
+  };
+}
+
+/** Captor mercy — free a held captive without payment. */
+export async function postRelease(db, auth, worldId, body) {
+  const captiveUid = body?.captiveUid || '';
+  if (!captiveUid) throw apiError(400, 'captiveUid required');
+  const held = await captives.findHeld(db, worldId, captiveUid);
+  if (!held) throw apiError(404, 'no held captive found');
+  if (held.captorUid !== auth.uid) throw apiError(403, 'only the captor may release a captive');
+  await captives.settleCaptivity(db, worldId, captiveUid, 'released', 'mercy');
+  return { ok: true };
 }
 
 export async function postProposal(db, auth, worldId, body) {

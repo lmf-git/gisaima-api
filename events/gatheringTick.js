@@ -71,7 +71,22 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
     console.warn(`TerrainGenerator error for group ${groupId}: ${err.message}`);
   }
 
-  const gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
+  let gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
+
+  // Abundance — repeated gathering depletes a tile (floor 20% yield); it
+  // recovers slowly each tick (see core/tick.js). Yield scales with the
+  // tile's current abundance, then the harvest wears it down further.
+  const abundance = typeof tile.abundance === 'number' ? tile.abundance : 1;
+  if (abundance < 1) {
+    const scaled = {};
+    for (const [code, qty] of Object.entries(gatheredItems)) {
+      const q = Math.floor(qty * abundance);
+      if (q > 0) scaled[code] = q;
+    }
+    gatheredItems = scaled;
+  }
+  ops.chunk(worldId, chunkKey, `${tileKey}.abundance`,
+    Math.max(0.2, +(abundance - 0.15).toFixed(3)));
 
   // Production tax — if a structure on this tile has tax rates set, its
   // steward takes a slice of the output before the group sees it.

@@ -14,7 +14,8 @@ import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
 import { chronicleCapture, chroniclePlayerKill, chronicleBattle } from "../db/chronicle.js";
 import { resolveHouseTribe, insertScopedReport } from "../db/reports.js";
-import { applyKillEffect as applyMoralityKillEffect, scoresFor as moralityScoresFor, moralityCombatFactor } from "../db/morality.js";
+import { applyKillEffect as applyMoralityKillEffect, scoresFor as moralityScoresFor, moralityCombatFactor, EVIL_THRESHOLD } from "../db/morality.js";
+import { createCaptive } from "../db/captives.js";
 import { killCharacter } from "../db/lives.js";
 import { broadcastToUser } from "../core/ws.js";
 import { geneticMod } from "gisaima-shared/lives/genetics.js";
@@ -760,9 +761,58 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       console.log(`Processing ${playersKilled.length} players killed in battle ${battleId}`);
 
       // For each killed player, mark them as not alive and clear their group
-      playersKilled.forEach(player => {
+      for (const player of playersKilled) {
         const playerId = player.playerId;   // dead character's lifeId
         const victimDocUid = player.uid;     // owning user (player doc key)
+
+        // CAPTURE — a player defeated by another player is taken prisoner
+        // rather than slain, unless the realm brands them a villain (villains
+        // are shown no quarter). The captor then negotiates their fate through
+        // the ransom flow: accept releases them, default executes them.
+        const captorLifeId = player.killedBy?.id || null;
+        const victimScore = Number(moralityScores[victimDocUid] ?? 0);
+        if (playerId && victimDocUid && captorLifeId && victimScore > EVIL_THRESHOLD) {
+          const captorUid = await _lifeUid(getDb(), captorLifeId).catch(() => null);
+          if (captorUid && captorUid !== victimDocUid) {
+            const location = { x: battle.locationX, y: battle.locationY };
+            try {
+              await createCaptive(getDb(), {
+                worldId,
+                captiveUid: victimDocUid,
+                captiveLifeId: playerId,
+                captiveName: player.displayName || null,
+                captorUid,
+                location,
+              });
+              ops.player(victimDocUid, worldId, 'lastMessage', {
+                text: 'Taken captive in battle',
+                timestamp: Date.now()
+              });
+              ops.chat(worldId, {
+                text: `${player.displayName || 'A player'} has been taken captive at (${location.x}, ${location.y})! Their fate now rests on a ransom.`,
+                type: 'event',
+                timestamp: Date.now(),
+                location
+              });
+              ops.report(victimDocUid, worldId, {
+                type: 'captured',
+                title: 'Taken Captive',
+                summary: `You were defeated and taken captive at (${location.x}, ${location.y}). Negotiate a ransom for your freedom — defaulting on an accepted ransom means death.`,
+                location,
+              });
+              ops.report(captorUid, worldId, {
+                type: 'captive_taken',
+                title: `Captured ${player.displayName || 'a player'}`,
+                summary: `You took ${player.displayName || 'a player'} captive at (${location.x}, ${location.y}). Propose a ransom to profit from their release.`,
+                location,
+              });
+              continue; // spared the sword — no death processing
+            } catch (err) {
+              console.error('[capture]', err); // fall through to normal death
+            }
+          }
+        }
+
         if (playerId) {
           // alive/control/deaths are reconciled by killCharacter (below). Here we
           // only stamp a death message on the owning player doc.
@@ -895,7 +945,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             })().catch((err) => console.error('[kill-credit]', err));
           }
         }
-      });
+      }
     }
 
     if (winner === undefined) {
