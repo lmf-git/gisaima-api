@@ -133,6 +133,19 @@ async function maybeAutoBountyEvil(db, worldId, uid) {
   }
 }
 
+/**
+ * Apply an automatic morality change from a game action (aggression, capture,
+ * no-quarter kill, etc.). Unlike `accuse`, this is system-driven and not capped
+ * by the daily allowance — the realm simply observes what you do.
+ */
+export async function adjustMorality(db, worldId, uid, polarity, magnitude = 1) {
+  if (!uid) return;
+  if (polarity !== 'good' && polarity !== 'evil') return;
+  const mag = Math.max(1, Math.floor(magnitude));
+  await applyDelta(db, worldId, uid, polarity, mag);
+  return { polarity, magnitude: mag };
+}
+
 export async function accuse(db, worldId, accuserUid, targetUid, polarity, reportRef, comment) {
   if (accuserUid === targetUid) throw new Error('cannot accuse yourself');
   if (polarity !== 'good' && polarity !== 'evil') throw new Error('polarity must be good or evil');

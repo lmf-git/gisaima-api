@@ -6,6 +6,7 @@ import { merge, groupCarryCapacity } from 'gisaima-shared/economy/items.js';
 import { getBiomeItems, ITEMS } from 'gisaima-shared/definitions/ITEMS.js';
 import { splitAndCreditStructure } from '../db/productionTax.js';
 import { geneticMod } from 'gisaima-shared/lives/genetics.js';
+import { skillForBiome, skillYieldMultiplier, XP_PER_GATHER } from '../db/skills.js';
 
 function _units(group) {
   if (!group?.units) return [];
@@ -71,7 +72,14 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
     console.warn(`TerrainGenerator error for group ${groupId}: ${err.message}`);
   }
 
-  let gatheredItems = generateGatheredItems(group, biome, rarity, terrainData);
+  // Biome-trained skill (mining/woodcutting/fishing) gives a yield bonus when
+  // the gatherer is skilled, and gathering trains it further (xp awarded below).
+  const gatherSkill = skillForBiome(biome);
+  const skillMult = (gatherSkill && group.gatherSkillKey === gatherSkill)
+    ? skillYieldMultiplier(group.gatherSkillLevel)
+    : 1;
+
+  let gatheredItems = generateGatheredItems(group, biome, rarity, terrainData, skillMult);
 
   // Abundance — repeated gathering depletes a tile (floor 20% yield); it
   // recovers slowly each tick (see core/tick.js). Yield scales with the
@@ -107,6 +115,18 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   const atCapacity    = capacity > 0 && itemCount >= capacity;
 
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.items`, mergedItems);
+
+  // Train the biome's gathering skill for each player doing the gathering.
+  if (gatherSkill) {
+    const trained = new Set();
+    for (const u of _units(group)) {
+      if (u?.type !== 'player') continue;
+      const ownerUid = u.uid || group.owner;
+      if (!ownerUid || ownerUid === 'monster' || trained.has(ownerUid)) continue;
+      trained.add(ownerUid);
+      ops.playerInc(ownerUid, worldId, `skills.${gatherSkill}.xp`, XP_PER_GATHER);
+    }
+  }
 
   if (gatherUntilFull && !atCapacity) {
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, group.gatherTickDuration || 1);
@@ -151,14 +171,14 @@ export function processGathering(worldId, ops, group, chunkKey, tileKey, groupId
   return true;
 }
 
-function generateGatheredItems(group, biome = 'plains', terrainRarity = 'common', terrainData = null) {
+function generateGatheredItems(group, biome = 'plains', terrainRarity = 'common', terrainData = null, skillMult = 1) {
   const items          = {};
   const numGatherers   = group.units ? (Array.isArray(group.units) ? group.units.length : Object.keys(group.units).length) : 1;
   const baseItems      = Math.floor(Math.random() * 2) + Math.ceil(numGatherers / 2);
   const rarityMult     = { common: 1, uncommon: 1.25, rare: 1.5, epic: 1.75, legendary: 2, mythic: 2.5 };
   // Sylvan/+yield ethnicity (and yield traits) boost the haul by 10% each.
   const yieldMult      = 1 + 0.1 * groupGeneticMod(group, 'yield');
-  const multiplier     = (rarityMult[terrainRarity] || 1) * yieldMult;
+  const multiplier     = (rarityMult[terrainRarity] || 1) * yieldMult * (skillMult || 1);
 
   function addItem(code, qty) {
     if (!code) return;

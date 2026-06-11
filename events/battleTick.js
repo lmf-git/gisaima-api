@@ -8,13 +8,14 @@ import {
   processPvPCombat,
 } from "gisaima-shared/war/battles.js";
 import { STRUCTURES } from "gisaima-shared/definitions/STRUCTURES.js";
+import UNITS from "gisaima-shared/definitions/UNITS.js";
 import { merge, groupCarryCapacity, splitToCapacity } from "gisaima-shared/economy/items.js";
 import { getDb } from "../db/connection.js";
 import { settleBountiesForKill } from "../db/bounties.js";
 import { recordKill, recordDeath } from "../db/stats.js";
 import { chronicleCapture, chroniclePlayerKill, chronicleBattle } from "../db/chronicle.js";
 import { resolveHouseTribe, insertScopedReport } from "../db/reports.js";
-import { applyKillEffect as applyMoralityKillEffect, scoresFor as moralityScoresFor, moralityCombatFactor, EVIL_THRESHOLD } from "../db/morality.js";
+import { applyKillEffect as applyMoralityKillEffect, scoresFor as moralityScoresFor, moralityCombatFactor, adjustMorality, EVIL_THRESHOLD } from "../db/morality.js";
 import { createCaptive } from "../db/captives.js";
 import { killCharacter } from "../db/lives.js";
 import { broadcastToUser } from "../core/ws.js";
@@ -326,6 +327,12 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
 
     const side1Groups = side1.groups || {};
     const side2Groups = side2.groups || {};
+
+    // Snapshot each side's force composition NOW, before any casualties are
+    // applied, so end-of-battle reports can describe the units that fought
+    // rather than just a casualty count.
+    const side1Forces = _summariseForces(Object.keys(side1Groups), tile.groups);
+    const side2Forces = _summariseForces(Object.keys(side2Groups), tile.groups);
 
     // Morale from morality: saints fight inspired, villains reviled. Fetch the
     // combatants' standings in one query, then fold into group power.
@@ -766,12 +773,14 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         const victimDocUid = player.uid;     // owning user (player doc key)
 
         // CAPTURE — a player defeated by another player is taken prisoner
-        // rather than slain, unless the realm brands them a villain (villains
-        // are shown no quarter). The captor then negotiates their fate through
-        // the ransom flow: accept releases them, default executes them.
+        // rather than slain, unless: the realm brands them a villain (villains
+        // are shown no quarter), or the attacker explicitly declared no quarter
+        // when launching the attack. The captor then negotiates their fate
+        // through the ransom flow: accept releases them, default executes them.
         const captorLifeId = player.killedBy?.id || null;
         const victimScore = Number(moralityScores[victimDocUid] ?? 0);
-        if (playerId && victimDocUid && captorLifeId && victimScore > EVIL_THRESHOLD) {
+        const offersQuarter = battle.quarter !== 'no_quarter';
+        if (offersQuarter && playerId && victimDocUid && captorLifeId && victimScore > EVIL_THRESHOLD) {
           const captorUid = await _lifeUid(getDb(), captorLifeId).catch(() => null);
           if (captorUid && captorUid !== victimDocUid) {
             const location = { x: battle.locationX, y: battle.locationY };
@@ -806,6 +815,9 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                 summary: `You took ${player.displayName || 'a player'} captive at (${location.x}, ${location.y}). Propose a ransom to profit from their release.`,
                 location,
               });
+              // Taking a fellow player captive is a mild stain on the captor.
+              adjustMorality(getDb(), worldId, captorUid, 'evil', 1)
+                .catch(err => console.error('[capture-morality]', err));
               continue; // spared the sword — no death processing
             } catch (err) {
               console.error('[capture]', err); // fall through to normal death
@@ -920,6 +932,17 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                 }).catch(err => console.error('[chronicle-kill]', err));
               }
               const m = await applyMoralityKillEffect(dbConn, worldId, killerUid, victimUid, location).catch(() => null);
+
+              // No quarter: putting a capturable (non-villain) player to the
+              // sword rather than sparing them is a deliberate cruelty and
+              // stains the killer beyond the standard kill effect.
+              if (battle.quarter === 'no_quarter' && Number(moralityScores[victimUid] ?? 0) > EVIL_THRESHOLD) {
+                await adjustMorality(dbConn, worldId, killerUid, 'evil', 3).catch(() => {});
+                ops.chat(worldId, {
+                  text: `${player.displayName || 'A player'} was shown no quarter — the realm marks the cruelty.`,
+                  type: 'event', category: 'player', timestamp: Date.now(), location
+                });
+              }
               if (m) {
                 ops.chat(worldId, {
                   text: `The realm marks ${m.polarity === 'good' ? '+' : '−'}${m.magnitude} ${m.polarity} on the killer of ${player.displayName || 'a player'}.`,
@@ -1083,7 +1106,10 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         const loserCasualties  = winner === 1 ? side2Casualties : side1Casualties;
         const winnerName       = winner === 1 ? side1Name : side2Name;
         const loserName        = winner === 1 ? side2Name : side1Name;
+        const winnerForces     = winner === 1 ? side1Forces : side2Forces;
+        const loserForces      = winner === 1 ? side2Forces : side1Forces;
         const loc              = { x: locationX, y: locationY };
+        const rounds           = `${tickCount} round${tickCount !== 1 ? 's' : ''}`;
 
         const winnerPlayerIds = _collectGroupOwners(winnerSurviving, tile.groups);
         const loserPlayerIds  = _collectGroupOwners(loserGroups, tile.groups);
@@ -1092,7 +1118,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           ops.report(pid, worldId, {
             type: 'battle_victory',
             title: `Victory at (${locationX}, ${locationY})`,
-            summary: `${winnerName} defeated ${loserName} after ${tickCount} round${tickCount !== 1 ? 's' : ''}. ${loserCasualties} enemy casualties, ${winnerCasualties} friendly casualties.`,
+            summary: `${_withForces(winnerName, winnerForces)} defeated ${_withForces(loserName, loserForces)} after ${rounds}. ${loserCasualties} enemy casualties, ${winnerCasualties} friendly casualties.`,
             location: loc,
           });
         }
@@ -1100,7 +1126,7 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
           ops.report(pid, worldId, {
             type: 'battle_defeat',
             title: `Defeat at (${locationX}, ${locationY})`,
-            summary: `${loserName} was defeated by ${winnerName} after ${tickCount} round${tickCount !== 1 ? 's' : ''}. ${loserCasualties} casualties.`,
+            summary: `${_withForces(loserName, loserForces)} was defeated by ${_withForces(winnerName, winnerForces)} after ${rounds}. ${loserCasualties} casualties.`,
             location: loc,
           });
         }
@@ -1341,6 +1367,34 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
                     location: { x: locX, y: locY }
                   });
                 }
+
+                // Report the loss to the structure's owner (and their banners).
+                // A captured structure already files structure_lost reports; a
+                // razed one previously notified no one, so the owner got no
+                // battle report at all when their hold fell.
+                if (isPlayerStructure && structure.owner) {
+                  const attacker = _withForces(side1Name, side1Forces);
+                  ops.report(structure.owner, worldId, {
+                    type: 'structure_lost',
+                    title: `${structureName} Destroyed`,
+                    summary: `Your structure ${structureName} at (${locX}, ${locY}) was destroyed by ${attacker} after ${tickCount} round${tickCount !== 1 ? 's' : ''}.`,
+                    location: { x: locX, y: locY },
+                  });
+
+                  (async () => {
+                    const dbc = getDb();
+                    const loc = { x: locX, y: locY };
+                    const prev = await resolveHouseTribe(dbc, worldId, structure.owner);
+                    const lost = {
+                      type: 'structure_lost',
+                      title: `${structureName} Destroyed`,
+                      summary: `${structureName} at (${locX}, ${locY}) was destroyed by ${attacker}.`,
+                      location: loc,
+                    };
+                    if (prev.houseId) insertScopedReport(dbc, worldId, { houseId: prev.houseId }, lost).catch(() => {});
+                    if (prev.tribeId) insertScopedReport(dbc, worldId, { tribeId: prev.tribeId }, lost).catch(() => {});
+                  })().catch(err => console.error('[scoped-report]', err));
+                }
               }
           } else if (newHealth <= 0) {
             // Structure critically damaged but not destroyed in first tick
@@ -1503,6 +1557,39 @@ function _findCaptureOwner(survivingGroupIds, tileGroups) {
     }
   }
   return null;
+}
+
+// Human-readable label for a single combat unit. Players use their character
+// name; recruited units resolve through their `unitId` (e.g. human_warrior →
+// "Footman"); monsters carry their type as the UNITS key (e.g. troll → "Troll").
+function _unitLabel(unit) {
+  if (!unit) return 'unit';
+  if (unit.type === 'player') return unit.displayName || 'a champion';
+  const def = UNITS[unit.unitId] || UNITS[unit.type] || UNITS[unit.unitType];
+  return def?.name || unit.name || unit.unitId || unit.type || 'unit';
+}
+
+// Summarise the forces across a set of groups as e.g. "2× Footman, 1× Troll".
+// Must be called BEFORE casualties are applied so it reflects who fought, not
+// who survived.
+function _summariseForces(groupIds, tileGroups) {
+  const counts = {};
+  for (const groupId of groupIds) {
+    const group = tileGroups?.[groupId];
+    if (!group?.units) continue;
+    for (const unit of Object.values(group.units)) {
+      const label = _unitLabel(unit);
+      counts[label] = (counts[label] || 0) + 1;
+    }
+  }
+  return Object.entries(counts)
+    .map(([label, n]) => (n > 1 ? `${n}× ${label}` : label))
+    .join(', ');
+}
+
+// Render "Name (forces)" — or just "Name" when no forces were recorded.
+function _withForces(name, forces) {
+  return forces ? `${name} (${forces})` : name;
 }
 
 // Collect unique player/owner IDs from a list of group IDs

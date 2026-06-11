@@ -3,11 +3,17 @@
  */
 
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { calculateGroupPower } from 'gisaima-shared/war/battles.js';
 import { Ops } from '../../lib/ops.js';
 import { broadcastToUser } from '../../core/ws.js';
+import { adjustMorality } from '../../db/morality.js';
 
 export async function attack({ uid, data, db }) {
   const { worldId, attackerGroupIds, defenderGroupIds, structureId, locationX, locationY } = data;
+  // How captured-able enemy players should be treated: 'capture' (spare and
+  // ransom, the default) or 'no_quarter' (kill outright). No-quarter weighs
+  // more heavily on the attacker's morality.
+  const quarter = data.quarter === 'no_quarter' ? 'no_quarter' : 'capture';
 
   if (!attackerGroupIds?.length)                   throw err(400, 'Must provide at least one attacker group');
   if (locationX === undefined || locationY === undefined) throw err(400, 'Must provide location coordinates');
@@ -68,7 +74,8 @@ export async function attack({ uid, data, db }) {
       })),
       name: getSideName(defenderGroups, structure, 2)
     },
-    tickCount: 0
+    tickCount: 0,
+    quarter, // 'capture' | 'no_quarter' — how spared enemy players are handled
   };
   if (structure) battleData.structureId = structure.id;
 
@@ -119,6 +126,23 @@ export async function attack({ uid, data, db }) {
 
   if (achievementOwner) {
     broadcastToUser(achievementOwner, { type: 'achievement_unlocked', achievementId: 'first_attack', worldId });
+  }
+
+  // Automatic morality: warring on fellow players blackens the name, and
+  // preying on a much weaker player is worse still. Monsters and structures
+  // are fair game and carry no penalty. Fire-and-forget — never blocks.
+  const defenderPlayerUids = new Set(
+    defenderGroups
+      .map(g => g.owner)
+      .filter(o => o && o !== 'monster' && o !== uid)
+  );
+  if (defenderPlayerUids.size > 0) {
+    const attackerPower = attackerGroups.reduce((s, g) => s + calculateGroupPower(g), 0);
+    const defenderPower = defenderGroups.reduce((s, g) => s + calculateGroupPower(g), 0);
+    const preyingOnWeak = defenderPower > 0 && attackerPower >= defenderPower * 2;
+    const magnitude = preyingOnWeak ? 3 : 1;
+    adjustMorality(db, worldId, uid, 'evil', magnitude)
+      .catch(err => console.error('[attack-morality]', err));
   }
 
   return { success: true, message: 'Attack started successfully', battleId };

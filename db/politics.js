@@ -114,6 +114,23 @@ export async function proposeVote(db, worldId, uid, body = {}) {
   const cost = sanitizeCost(body.cost);
   if (!cost.gold && !Object.keys(cost.items).length) throw new Error('a proposal must spend something');
 
+  // Kind-specific required parameters: a bounty must name its quarry, and a
+  // public-works motion must name the building/upgrade it funds.
+  const rawParams = body.params && typeof body.params === 'object' ? body.params : {};
+  const params = {};
+  if (kind === 'bounty') {
+    const targetUid = (rawParams.targetUid || '').toString();
+    if (!targetUid) throw new Error('a bounty must name the player it targets');
+    params.targetUid = targetUid;
+    params.targetName = (rawParams.targetName || '').toString().slice(0, 80) || targetUid;
+  } else if (kind === 'public_works') {
+    const building = (rawParams.building || '').toString();
+    if (!building) throw new Error('public works must name the building or upgrade it funds');
+    params.building = building.slice(0, 80);
+    params.buildingName = (rawParams.buildingName || '').toString().slice(0, 80) || building;
+  }
+  if (Number.isFinite(Number(rawParams.durationMs))) params.durationMs = Number(rawParams.durationMs);
+
   const durationMs = clampDuration(body.durationMs);
   const now = new Date();
   const doc = {
@@ -123,7 +140,7 @@ export async function proposeVote(db, worldId, uid, body = {}) {
     proposedBy: uid,
     kind,
     cost,
-    params: body.params && typeof body.params === 'object' ? body.params : {},
+    params,
     options: [
       { id: 'approve', label: 'Approve' },
       { id: 'reject',  label: 'Reject' },
@@ -188,9 +205,25 @@ async function applyProposalEffect(db, worldId, vote, now) {
     await db.collection('worlds').updateOne(
       { _id: worldId }, { $set: { 'info.publicWorksUntil': ms + dur } }, { upsert: true });
   } else if (vote.kind === 'bounty') {
-    // Spent gold seeds a monster-slaying bounty pool claimed during play.
-    await db.collection('worlds').updateOne(
-      { _id: worldId }, { $inc: { 'info.bountyPool': vote.cost?.gold || 0 } }, { upsert: true });
+    const gold = vote.cost?.gold || 0;
+    const targetUid = vote.params?.targetUid;
+    if (targetUid) {
+      // A targeted bounty posts a real contract on the named player's head,
+      // claimable by whoever slays them (see settleBountiesForKill).
+      const { createBounty } = await import('./bounties.js');
+      await createBounty(db, {
+        worldId,
+        targetUid,
+        targetName: vote.params?.targetName || targetUid,
+        amount: gold,
+        postedBy: 'council',
+        postedByName: 'The Council',
+      });
+    } else {
+      // Untargeted: seed the generic monster-slaying pool.
+      await db.collection('worlds').updateOne(
+        { _id: worldId }, { $inc: { 'info.bountyPool': gold } }, { upsert: true });
+    }
   }
 }
 

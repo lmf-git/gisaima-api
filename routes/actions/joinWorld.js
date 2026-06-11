@@ -4,9 +4,10 @@
 
 import { incrementPlayerCount, getPlayerWorldData, setPlayerWorldData } from '../../db/players.js';
 import { foundHouseForPlayer, requestToJoinHouse } from '../../db/houses.js';
+import ImageProvider from '../../lib/imageProvider.js';
 
 export async function joinWorld({ uid, data, db }) {
-  const { worldId, race, sex, displayName, houseName, houseId, spawnPosition } = data;
+  const { worldId, race, sex, displayName, houseName, houseId, spawnPosition, motto, avatar } = data;
 
   if (!worldId) throw err(400, 'worldId is required');
   if (!race)    throw err(400, 'race is required');
@@ -30,12 +31,27 @@ export async function joinWorld({ uid, data, db }) {
 
   const isNewPlayer = !(await getPlayerWorldData(db, uid, worldId));
 
+  // Optional personal motto + avatar chosen during join confirmation. The
+  // avatar arrives as a base64 data-URI and is uploaded to Cloudinary (only
+  // its URL is stored); failure here is non-fatal — the player still joins.
+  const cleanMotto = typeof motto === 'string' ? motto.trim().slice(0, 120) : '';
+  let avatarUrl = null;
+  if (typeof avatar === 'string' && avatar.startsWith('data:image/') && ImageProvider.enabled) {
+    try {
+      avatarUrl = await ImageProvider.upload(avatar, { folder: `gisaima/${worldId}/avatars` });
+    } catch (e) {
+      console.error('[joinWorld] avatar upload failed:', e?.message || e);
+    }
+  }
+
   await setPlayerWorldData(db, uid, worldId, {
     joined: Date.now(),
     race,
     sex: chosenSex, // remembered so the bound character is born with it
     alive: false,
     displayName: displayName || '',
+    motto: cleanMotto,
+    ...(avatarUrl ? { avatar: avatarUrl } : {}),
     id: uid,
     lastLocation: { x: coordinates.x, y: coordinates.y, timestamp: Date.now() }
   });

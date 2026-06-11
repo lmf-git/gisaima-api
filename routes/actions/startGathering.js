@@ -6,6 +6,7 @@ import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { merge, groupCarryCapacity, itemCount } from 'gisaima-shared/economy/items.js';
 import { Ops } from '../../lib/ops.js';
 import { grantAchievement } from '../../lib/achievements.js';
+import { skillForBiome, skillLevel } from '../../db/skills.js';
 
 export async function startGathering({ uid, data, db }) {
   const { groupId, locationX, locationY, worldId, gatherUntilFull = false } = data;
@@ -64,6 +65,20 @@ export async function startGathering({ uid, data, db }) {
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`,                 'gathering');
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringBiome`,         biome);
   ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatheringTicksRemaining`, GATHER_TICKS);
+
+  // Stamp the gatherer's relevant skill level onto the group so the gathering
+  // tick can grant a biome-appropriate yield bonus (the tick has no easy access
+  // to the player doc). Read the owner's current xp for this biome's skill.
+  const gatherSkill = skillForBiome(biome);
+  if (gatherSkill) {
+    const playerDoc = await db.collection('players').findOne(
+      { _id: uid },
+      { projection: { [`worlds.${worldId}.skills.${gatherSkill}.xp`]: 1 } }
+    ).catch(() => null);
+    const xp = playerDoc?.worlds?.[worldId]?.skills?.[gatherSkill]?.xp || 0;
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherSkillKey`,   gatherSkill);
+    ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherSkillLevel`, skillLevel(xp));
+  }
   if (gatherUntilFull) {
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherUntilFull`,      true);
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.gatherTickDuration`,   GATHER_TICKS);
