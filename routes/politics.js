@@ -1,6 +1,6 @@
 import { apiError } from '../core/auth.js';
 import {
-  listOpenVotes, castVote, getCoffers, proposeVote,
+  listOpenVotes, castVote, getCoffers, proposeVote, donateToCoffers,
   listOpenElections, callElection, castElectionVote,
 } from '../db/politics.js';
 import { getWorldDoc } from '../db/worlds.js';
@@ -33,6 +33,17 @@ export async function postProposeVote(db, auth, worldId, body) {
     return { ok: true, vote };
   } catch (e) {
     throw apiError(400, e.message || 'could not create proposal');
+  }
+}
+
+export async function postDonate(db, auth, worldId, body) {
+  const amount = Math.floor(Number(body?.amount) || 0);
+  if (amount <= 0) throw apiError(400, 'amount must be a positive number');
+  try {
+    const coffers = await donateToCoffers(db, worldId, amount, auth.uid);
+    return { ok: true, coffers };
+  } catch (e) {
+    throw apiError(400, e.message || 'could not donate');
   }
 }
 

@@ -16,7 +16,7 @@ import { getFriends, getFriendRequests, postFriendRequest,
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
-import { getPolitics, postVote, postProposeVote,
+import { getPolitics, postVote, postProposeVote, postDonate,
          postCallElection, postElectionVote }           from './politics.js';
 import * as morality  from './morality.js';
 import * as ransom    from './ransom.js';
@@ -205,6 +205,7 @@ export async function route(db, req, body) {
 
   // Politics
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && !s4)              return postProposeVote(db, auth, s2, body);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && s4 === 'donate')  return postDonate(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'elections' && !s4)             return postCallElection(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'elections' && s4)              return postElectionVote(db, auth, s2, s4, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'politics' && s4)               return postVote(db, auth, s2, s4, body);

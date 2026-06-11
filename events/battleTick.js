@@ -390,6 +390,13 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
       const g = tile.groups?.[groupId];
       if (g) describeGroup(g, side2Names);
     }
+    // A structure defending on side 2 has no group — name it so the Chronicle
+    // shows both sides rather than only the attackers.
+    if (battle.structureId && tile.structure) {
+      const sName = tile.structure.name
+        || (tile.structure.type ? `${tile.structure.type.charAt(0).toUpperCase()}${tile.structure.type.slice(1)}` : 'a stronghold');
+      side2Names.push(sName);
+    }
     if (battleUnitCount > 1) {
       const locX = battle.locationX ?? parseInt(tileKey.split(',')[0]);
       const locY = battle.locationY ?? parseInt(tileKey.split(',')[1]);
