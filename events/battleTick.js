@@ -1121,12 +1121,26 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
         const winnerPlayerIds = _collectGroupOwners(winnerSurviving, tile.groups);
         const loserPlayerIds  = _collectGroupOwners(loserGroups, tile.groups);
 
+        const winnerStats = winner === 1 ? side1CombatStats : side2CombatStats;
+        const loserStats  = winner === 1 ? side2CombatStats : side1CombatStats;
+        const lootItems   = Object.fromEntries(
+          Object.entries(battleLoot).filter(([k, v]) => !k.startsWith('_') && v > 0)
+        );
+
         for (const pid of winnerPlayerIds) {
           ops.report(pid, worldId, {
             type: 'battle_victory',
             title: `Victory at (${locationX}, ${locationY})`,
             summary: `${_withForces(winnerName, winnerForces)} defeated ${_withForces(loserName, loserForces)} after ${rounds}. ${loserCasualties} enemy casualties, ${winnerCasualties} friendly casualties.`,
             location: loc,
+            rounds: tickCount,
+            winnerName,
+            loserName,
+            friendlyCasualties: winnerCasualties,
+            enemyCasualties: loserCasualties,
+            friendlyStats: winnerStats,
+            enemyStats: loserStats,
+            loot: lootItems,
           });
         }
         for (const pid of loserPlayerIds) {
@@ -1135,6 +1149,14 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             title: `Defeat at (${locationX}, ${locationY})`,
             summary: `${_withForces(loserName, loserForces)} was defeated by ${_withForces(winnerName, winnerForces)} after ${rounds}. ${loserCasualties} casualties.`,
             location: loc,
+            rounds: tickCount,
+            winnerName,
+            loserName,
+            friendlyCasualties: loserCasualties,
+            enemyCasualties: winnerCasualties,
+            friendlyStats: loserStats,
+            enemyStats: winnerStats,
+            loot: lootItems,
           });
         }
       }
