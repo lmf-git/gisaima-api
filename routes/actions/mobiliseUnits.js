@@ -5,6 +5,7 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import UNITS from 'gisaima-shared/definitions/UNITS.js';
+import { merge, itemCount, groupCarryCapacity } from 'gisaima-shared/economy/items.js';
 import { Ops } from '../../lib/ops.js';
 import { isInsideExclusion } from '../../db/spawns.js';
 import { getPlayerWorldData } from '../../db/players.js';
@@ -155,6 +156,49 @@ export async function mobiliseUnits({ uid, data, db }) {
   updatedGroups[newGroupId] = newGroup;
 
   const ops = new Ops();
+
+  // Load selected items into the new group. Items can only be drawn from a
+  // structure on this tile — either its shared storage (structure.items) or the
+  // player's personal bank (structure.banks[uid]). Quantities are validated
+  // against the chosen source and capped at the group's carry capacity, then
+  // deducted so the same items can't be both stored and carried.
+  const requestedItems = (data.items && typeof data.items === 'object' && !Array.isArray(data.items))
+    ? data.items : null;
+  if (requestedItems && Object.keys(requestedItems).length) {
+    if (!tile.structure) throw err(409, 'No structure here to draw items from.');
+    const itemSource = data.itemSource === 'personal' ? 'personal' : 'shared';
+    const available = merge({}, itemSource === 'personal'
+      ? (tile.structure.banks?.[uid] || {})
+      : (tile.structure.items || {}));
+
+    const take = {};
+    for (const [codeRaw, qtyRaw] of Object.entries(requestedItems)) {
+      const code = String(codeRaw).toUpperCase();
+      if (code.startsWith('_')) continue;
+      const qty = Math.floor(Number(qtyRaw) || 0);
+      if (qty <= 0) continue;
+      if ((available[code] || 0) < qty) throw err(409, `Not enough ${code} in ${itemSource} storage.`);
+      take[code] = qty;
+    }
+
+    const takeCount = itemCount(take);
+    if (takeCount > 0) {
+      const capacity = groupCarryCapacity(newGroup);
+      if (capacity > 0 && takeCount > capacity) {
+        throw err(409, `Selected items (${takeCount}) exceed the group's carry capacity (${capacity}).`);
+      }
+      const remaining = { ...available };
+      for (const [code, qty] of Object.entries(take)) {
+        remaining[code] = (remaining[code] || 0) - qty;
+        if (remaining[code] <= 0) delete remaining[code];
+      }
+      newGroup.items = merge({}, take);
+      ops.chunk(worldId, chunkKey, itemSource === 'personal'
+        ? `${tileKey}.structure.banks.${uid}`
+        : `${tileKey}.structure.items`, remaining);
+    }
+  }
+
   ops.chunk(worldId, chunkKey, `${tileKey}.groups`, updatedGroups);
   ops.chat(worldId, {
     type: 'system',
