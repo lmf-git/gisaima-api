@@ -5,7 +5,7 @@ import { getWorlds, getWorld, getChunk, getWorldChat } from './worlds.js';
 import { getPlayerWorlds, getPlayerWorldState,
          postRankingPrivacy, postProfile }              from './players.js';
 import { postChat }                                     from './chat.js';
-import { getReports, postReportRead }                   from './reports.js';
+import { getReports, postReportRead, deleteReport }     from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
 import { getHouses, postCreateHouse, postRequestJoinHouse,
          postCancelJoinRequest, postLeaveHouse,
@@ -259,6 +259,7 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && !s4)                 return lives.postBirth(db, auth, s2, body);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'reports' && !s4)               return getReports(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'reports' && s4)                return postReportRead(db, auth, s2, s4);
+  if (method === 'DELETE' && s1 === 'worlds' && s3 === 'reports' && s4)              return deleteReport(db, auth, s2, s4);
 
   // Players
   if (method === 'GET' && s1 === 'players' && s3 === 'worlds' && !s4) return getPlayerWorlds(db, auth, s2);

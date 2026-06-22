@@ -1,8 +1,37 @@
 import { getChunkKey } from 'gisaima-shared/map/cartography.js';
+import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { Units } from 'gisaima-shared/units/units.js';
 import { Ops } from '../../lib/ops.js';
 import { canUse } from '../../structures/access.js';
 import { grantAchievement } from '../../lib/achievements.js';
+
+// Cache one terrain generator per world for the lifetime of the process.
+const _terrainByWorld = new Map();
+async function _terrainFor(db, worldId) {
+  if (_terrainByWorld.has(worldId)) return _terrainByWorld.get(worldId);
+  const w = await db.collection('worlds').findOne({ _id: worldId }, { projection: { 'info.seed': 1 } });
+  const gen = new TerrainGenerator(w?.info?.seed ?? 1, 4_000);
+  _terrainByWorld.set(worldId, gen);
+  return gen;
+}
+
+// Boats are water-motion units; they can only be put to sea from a structure
+// that sits on or borders water (the same gate the build/harbour logic uses).
+function isBoatUnit(unitDef) {
+  return unitDef?.type === 'boat'
+    || unitDef?.type === 'ship'
+    || (Array.isArray(unitDef?.motion) && unitDef.motion.includes('water'));
+}
+
+async function hasWaterAccess(db, worldId, x, y) {
+  const terrain = await _terrainFor(db, worldId);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (terrain.getTerrainData(x + dx, y + dy)?.water) return true;
+    }
+  }
+  return false;
+}
 
 export async function recruitUnits({ uid, data, db }) {
   const { structureId, x, y, worldId, unitType, quantity, cost } = data;
@@ -34,6 +63,13 @@ export async function recruitUnits({ uid, data, db }) {
   // this a crafted request could recruit elite units at a basic shelter.
   const reqCheck = Units.checkRecruitRequirements(structure, unitType);
   if (!reqCheck.ok) throw err(409, reqCheck.reason);
+
+  // Boats need water access — the structure must sit on or beside water. Without
+  // this a landlocked structure (no harbour, no shoreline) could raise a fleet
+  // that has nowhere to launch.
+  if (isBoatUnit(unitDef) && !(await hasWaterAccess(db, worldId, x, y))) {
+    throw err(409, 'Boats can only be recruited at a structure on or beside water.');
+  }
 
   const isOwned = structure.owner === uid;
   const allowed = await canUse({ db, worldId, structure, uid, action: 'recruit' });

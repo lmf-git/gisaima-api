@@ -32,7 +32,7 @@ export async function getReportsFor(db, worldId, { uid, houseId, tribeId }) {
   if (!or.length) return [];
 
   const rows = await db.collection('reports')
-    .find({ worldId, $or: or })
+    .find({ worldId, $or: or, dismissedBy: { $ne: uid } })
     .sort({ timestamp: -1 })
     .limit(150)
     .toArray();
@@ -84,4 +84,15 @@ export async function markReportRead(db, reportId, playerId) {
     { _id: new ObjectId(reportId), playerId },
     { $set: { read: true } }
   );
+}
+
+// Remove a report from a player's view. A personal report (owned by the player)
+// is deleted outright; a shared house/tribe report is only hidden for this
+// player — recorded in `dismissedBy` — so it stays visible to other members.
+export async function removeReport(db, reportId, uid) {
+  const _id = new ObjectId(reportId);
+  const res = await db.collection('reports').deleteOne({ _id, playerId: uid });
+  if (res.deletedCount > 0) return { deleted: true };
+  await db.collection('reports').updateOne({ _id }, { $addToSet: { dismissedBy: uid } });
+  return { deleted: false, dismissed: true };
 }
