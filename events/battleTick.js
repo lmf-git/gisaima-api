@@ -334,6 +334,18 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
     const side1Forces = _summariseForces(Object.keys(side1Groups), tile.groups);
     const side2Forces = _summariseForces(Object.keys(side2Groups), tile.groups);
 
+    // Persist a per-side roster (the units that fought) unioned across ticks.
+    // Casualties shrink the live groups each tick, so a roster sampled only at
+    // battle's end would under-count — by the final round the loser is often
+    // down to its last unit. Merging each tick's snapshot by unit id keeps every
+    // combatant that ever appeared (including mid-battle reinforcements), so the
+    // end-of-battle report's unit count agrees with the casualty tally and can
+    // render unit icons for the full force.
+    const side1Roster = _mergeRosters(side1.roster, _rosterSnapshot(Object.keys(side1Groups), tile.groups));
+    const side2Roster = _mergeRosters(side2.roster, _rosterSnapshot(Object.keys(side2Groups), tile.groups));
+    ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.side1.roster`, side1Roster);
+    ops.chunk(worldId, chunkKey, `${tileKey}.battles.${battleId}.side2.roster`, side2Roster);
+
     // Morale from morality: saints fight inspired, villains reviled. Fetch the
     // combatants' standings in one query, then fold into group power.
     const ownerUids = [];
@@ -1123,6 +1135,10 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
 
         const winnerStats = winner === 1 ? side1CombatStats : side2CombatStats;
         const loserStats  = winner === 1 ? side2CombatStats : side1CombatStats;
+        // Full rosters (everyone who fought) drive the report's unit count and
+        // icons — winnerStats/loserStats.unitCount only reflects the final tick.
+        const winnerRoster = winner === 1 ? side1Roster : side2Roster;
+        const loserRoster  = winner === 1 ? side2Roster : side1Roster;
         const lootItems   = Object.fromEntries(
           Object.entries(battleLoot).filter(([k, v]) => !k.startsWith('_') && v > 0)
         );
@@ -1138,8 +1154,10 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             loserName,
             friendlyCasualties: winnerCasualties,
             enemyCasualties: loserCasualties,
-            friendlyStats: winnerStats,
-            enemyStats: loserStats,
+            friendlyStats: { ...winnerStats, unitCount: winnerRoster.length },
+            enemyStats: { ...loserStats, unitCount: loserRoster.length },
+            friendlyRoster: winnerRoster,
+            enemyRoster: loserRoster,
             loot: lootItems,
           });
         }
@@ -1154,8 +1172,10 @@ export async function processBattle(worldId, chunkKey, tileKey, battleId, battle
             loserName,
             friendlyCasualties: loserCasualties,
             enemyCasualties: winnerCasualties,
-            friendlyStats: loserStats,
-            enemyStats: winnerStats,
+            friendlyStats: { ...loserStats, unitCount: loserRoster.length },
+            enemyStats: { ...winnerStats, unitCount: winnerRoster.length },
+            friendlyRoster: loserRoster,
+            enemyRoster: winnerRoster,
             loot: lootItems,
           });
         }
@@ -1619,6 +1639,37 @@ function _summariseForces(groupIds, tileGroups) {
 // Render "Name (forces)" — or just "Name" when no forces were recorded.
 function _withForces(name, forces) {
   return forces ? `${name} (${forces})` : name;
+}
+
+// Snapshot the units across a set of groups as a flat roster carrying the
+// fields the client needs to render icons (type/race) and labels. Sampled each
+// tick BEFORE casualties so it reflects who fought, then unioned via
+// _mergeRosters so the roster survives attrition.
+function _rosterSnapshot(groupIds, tileGroups) {
+  const out = [];
+  for (const groupId of groupIds) {
+    const group = tileGroups?.[groupId];
+    if (!group?.units) continue;
+    for (const [unitId, unit] of Object.entries(group.units)) {
+      if (!unit) continue;
+      out.push({
+        id: unit.id || `${groupId}:${unitId}`,
+        type: unit.type || unit.unitType || 'unit',
+        race: unit.race || null,
+        name: _unitLabel(unit),
+      });
+    }
+  }
+  return out;
+}
+
+// Union two rosters by unit id, keeping the first occurrence. Lets the live
+// roster accumulate every combatant across ticks even as groups lose units.
+function _mergeRosters(prev = [], next = []) {
+  const byId = new Map();
+  for (const u of (prev || [])) if (u && u.id != null) byId.set(String(u.id), u);
+  for (const u of (next || [])) if (u && u.id != null && !byId.has(String(u.id))) byId.set(String(u.id), u);
+  return [...byId.values()];
 }
 
 // Collect unique player/owner IDs from a list of group IDs
