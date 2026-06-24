@@ -377,36 +377,8 @@ function _sameTile(a, b) {
     a.lastLocation.y === b.lastLocation.y;
 }
 
-/**
- * Marry two living characters who are together on the same tile. Sets a mutual
- * `spouseLifeId`. The caller must own at least one of the two. Returns the
- * location and (if any) the structure where the wedding takes place so the
- * route can announce a wedding event.
- */
-export async function marry(db, worldId, callerUid, lifeIdA, lifeIdB) {
-  if (!lifeIdA || !lifeIdB || String(lifeIdA) === String(lifeIdB)) {
-    throw new Error('two different characters are required');
-  }
-  const a = await db.collection('lives').findOne({ _id: new ObjectId(lifeIdA), worldId });
-  const b = await db.collection('lives').findOne({ _id: new ObjectId(lifeIdB), worldId });
-  if (!a || !b) throw new Error('character not found');
-  if (a.died || b.died) throw new Error('a character has died');
-  if (!a.alive || !b.alive) throw new Error('both characters must be on the map');
-  if (callerUid !== a.uid && callerUid !== b.uid) throw new Error('you must own one of the characters');
-  if (a.spouseLifeId || b.spouseLifeId) throw new Error('a character is already married');
-  if (!_sameTile(a, b)) throw new Error('the couple must be together on the same tile');
-
-  await db.collection('lives').updateOne({ _id: a._id }, { $set: { spouseLifeId: b._id, marriedAt: new Date() } });
-  await db.collection('lives').updateOne({ _id: b._id }, { $set: { spouseLifeId: a._id, marriedAt: new Date() } });
-
-  const { x, y } = a.lastLocation;
-  const chunkKey = getChunkKey(x, y);
-  const chunkDoc = await db.collection('chunks').findOne(
-    { worldId, chunkKey }, { projection: { [`tiles.${x},${y}.structure.name`]: 1, [`tiles.${x},${y}.structure.type`]: 1 } }
-  );
-  const structure = chunkDoc?.tiles?.[`${x},${y}`]?.structure || null;
-  return { ok: true, location: { x, y }, structureName: structure?.name || null, names: [a.name, b.name] };
-}
+// Marriage is now courted via proposals — see `api/db/marriage.js`, which sets
+// the mutual `spouseLifeId` that `reproduce` (below) relies on.
 
 export async function reproduce(db, worldId, parentLifeIds = []) {
   if (!parentLifeIds.length) throw new Error('at least one parent required');

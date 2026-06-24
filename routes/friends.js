@@ -2,6 +2,7 @@ import {
   areFriends, listFriends, listRequests,
   sendRequest, acceptRequest, declineRequest, removeFriend,
 } from '../db/friends.js';
+import { clearBetween as clearMarriageProposals } from '../db/marriage.js';
 
 function err(status, msg) { return Object.assign(new Error(msg), { status }); }
 
@@ -73,5 +74,7 @@ export async function postDeclineRequest(db, auth, worldId, otherUid) {
 export async function postRemoveFriend(db, auth, worldId, otherUid) {
   if (!otherUid) throw err(400, 'uid required');
   if (!(await areFriends(db, worldId, auth.uid, otherUid))) throw err(404, 'not friends');
+  // A broken friendship voids any pending betrothal between the two.
+  await clearMarriageProposals(db, worldId, auth.uid, otherUid);
   return removeFriend(db, worldId, auth.uid, otherUid);
 }

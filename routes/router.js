@@ -13,6 +13,8 @@ import { getHouses, postCreateHouse, postRequestJoinHouse,
 import { getBounties, postBounty, postBountyClaim }     from './bounties.js';
 import { getFriends, getFriendRequests, postFriendRequest,
          postAcceptRequest, postDeclineRequest, postRemoveFriend, searchPlayers } from './friends.js';
+import { getMarriageProposals, postProposeMarriage,
+         postAcceptMarriage, postDeclineMarriage } from './marriage.js';
 import { touchLastSeen }                                from '../db/cleanup.js';
 import { getOffers, postOffer, postOfferAction }        from './trade.js';
 import { getRoutes, postRoute, postRouteAction }         from './tradeRoutes.js';
@@ -66,6 +68,7 @@ import setStructureAccess    from './actions/setStructureAccess.js';
 import setRetreat            from './actions/setRetreat.js';
 import splitGroup            from './actions/splitGroup.js';
 import mergeGroups           from './actions/mergeGroups.js';
+import transferStorage       from './actions/transferStorage.js';
 
 export async function route(db, req, body) {
   const { method } = req;
@@ -95,7 +98,10 @@ export async function route(db, req, body) {
     const chunkAuth = getAuth(req); // optional — won't throw if absent
     return getChunk(db, s2, decodeURIComponent(s4), chunkAuth?.uid ?? null);
   }
-  if (method === 'GET' && s1 === 'worlds' && s3 === 'chat')         return getWorldChat(db, s2);
+  if (method === 'GET' && s1 === 'worlds' && s3 === 'chat') {
+    const chatAuth = getAuth(req); // optional — filter by visibility when present
+    return getWorldChat(db, s2, chatAuth?.uid ?? null);
+  }
   if (method === 'GET' && s1 === 'worlds' && s3 === 'rankings')     return getWorldRankings(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'chronicle')    return getChronicle(db, s2);
   if (method === 'GET' && s1 === 'worlds' && s3 === 'bounties' && !s4) return getBounties(db, s2);
@@ -186,6 +192,16 @@ export async function route(db, req, body) {
     throw apiError(400, 'friend action required');
   }
 
+  // Marriage proposals
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'marriage' && s4 === 'proposals') return getMarriageProposals(db, auth, s2);
+  if (method === 'POST' && s1 === 'worlds' && s3 === 'marriage' && s4 === 'proposals') {
+    const [, , , , , s5, s6] = p.split('/');
+    if (!s5) return postProposeMarriage(db, auth, s2, body);
+    if (s6 === 'accept')  return postAcceptMarriage(db, auth, s2, s5);
+    if (s6 === 'decline') return postDeclineMarriage(db, auth, s2, s5);
+    throw apiError(400, 'marriage proposal action required');
+  }
+
   // Trade
   if (method === 'POST' && s1 === 'worlds' && s3 === 'trade' && s4 === 'offers') {
     const [, , , , , s5, s6] = p.split('/');
@@ -255,7 +271,6 @@ export async function route(db, req, body) {
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'control')    return lives.postControl(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'respawn')    return lives.postRespawn(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'reproduce')  return lives.postReproduce(db, auth, s2, body);
-  if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && s4 === 'marry')      return lives.postMarry(db, auth, s2, body);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'lives' && !s4)                 return lives.postBirth(db, auth, s2, body);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'reports' && !s4)               return getReports(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'reports' && s4)                return postReportRead(db, auth, s2, s4);
@@ -299,6 +314,7 @@ export async function route(db, req, body) {
     if (s2 === 'setRetreat')            return setRetreat(ctx);
     if (s2 === 'splitGroup')            return splitGroup(ctx);
     if (s2 === 'mergeGroups')           return mergeGroups(ctx);
+    if (s2 === 'transferStorage')       return transferStorage(ctx);
 
     throw apiError(404, `unknown action: ${s2}`);
   }

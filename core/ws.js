@@ -14,7 +14,7 @@
 
 import { WebSocketServer } from 'ws';
 import { verifyToken } from './auth.js';
-import { filterTilesForPlayer } from '../lib/visibility.js';
+import { filterTilesForPlayer, getVisibleTiles } from '../lib/visibility.js';
 
 // subscriptions: Map<ws, Set<string>>  — channelKey per socket
 const subscriptions = new Map();
@@ -140,8 +140,36 @@ export function broadcastWorldTick(worldId, info) {
   broadcast(worldChannel(worldId), { type: 'world_tick', worldId, info });
 }
 
+/**
+ * Chat fan-out with fog-of-war. Messages tagged with a map `location` are only
+ * delivered to subscribers who can currently see that tile (their visibility
+ * radius), so players don't overhear events outside their sight. Messages
+ * without a location (global/realm chat) reach every chat subscriber. The
+ * author always receives their own message regardless of sight.
+ */
 export function broadcastChatMessage(worldId, message) {
-  broadcast(chatChannel(worldId), { type: 'chat_message', worldId, message });
+  if (!_wss) return;
+  const channel = chatChannel(worldId);
+  const loc = message?.location;
+  const hasLoc = loc && Number.isFinite(loc.x) && Number.isFinite(loc.y);
+
+  if (!hasLoc) {
+    broadcast(channel, { type: 'chat_message', worldId, message });
+    return;
+  }
+
+  const tileKey = `${loc.x},${loc.y}`;
+  const data = JSON.stringify({ type: 'chat_message', worldId, message });
+  for (const [ws, subs] of subscriptions) {
+    if (!subs.has(channel) || ws.readyState !== 1 /* OPEN */) continue;
+    const userId = wsUserIds.get(ws);
+    // Author always hears themselves.
+    if (userId && userId === message.userId) { ws.send(data); continue; }
+    // null visibility = cache not built yet → don't hide (safe default, matching
+    // the chunk filter). Otherwise gate strictly on the visible-tiles set.
+    const visible = userId ? getVisibleTiles(userId, worldId) : null;
+    if (!visible || visible.has(tileKey)) ws.send(data);
+  }
 }
 
 /** Send a message to all authenticated sockets belonging to a specific user. */

@@ -32,12 +32,15 @@ export function processMobilizations(worldId, ops, groups, chunkKey, tileKey, no
 
 function createMobilizationMessage(group, tileKey) {
   const groupName   = group.name || 'Unnamed force';
-  const groupSize   = group.units?.length || 'unknown size';
+  // `units` is an object keyed by unit id — count its entries (arrays handled too).
+  const groupSize   = Array.isArray(group.units)
+    ? group.units.length
+    : Object.keys(group.units || {}).length;
   const groupRace   = group.race ? `${group.race}` : '';
   const location    = tileKey.replace(',', ', ');
   let message       = '';
 
-  if (groupSize === 1) {
+  if (groupSize <= 1) {
     message = `A lone ${groupRace} warrior has mobilized`;
   } else if (groupSize <= 3) {
     message = `A small band of ${groupRace} fighters has mobilized`;

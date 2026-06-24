@@ -1,6 +1,6 @@
 import { apiError } from '../core/auth.js';
 import { getRecentChat } from '../db/chat.js';
-import { filterTilesForPlayer, refreshIfStale } from '../lib/visibility.js';
+import { filterTilesForPlayer, refreshIfStale, getVisibleTiles } from '../lib/visibility.js';
 
 export async function getWorlds(db) {
   const worlds = await db.collection('worlds').find({}, { projection: { info: 1 } }).toArray();
@@ -20,6 +20,23 @@ export async function getChunk(db, worldId, chunkKey, userId = null) {
   return userId ? filterTilesForPlayer(userId, worldId, tiles) : tiles;
 }
 
-export async function getWorldChat(db, worldId) {
-  return getRecentChat(db, worldId, 100);
+// Chat history with the same fog-of-war as the live broadcast: location-tagged
+// messages are only returned to a player whose current visibility covers that
+// tile. Global (location-less) messages and the player's own messages always
+// come through. Anonymous/no-uid requests get the unfiltered feed.
+export async function getWorldChat(db, worldId, userId = null) {
+  const messages = await getRecentChat(db, worldId, 100);
+  if (!userId) return messages;
+
+  await refreshIfStale(db, worldId);
+  const visible = getVisibleTiles(userId, worldId);
+  if (!visible) return messages; // cache not ready → show everything (safe default)
+
+  return messages.filter(m => {
+    const loc = m?.location;
+    const hasLoc = loc && Number.isFinite(loc.x) && Number.isFinite(loc.y);
+    if (!hasLoc) return true;                          // global / realm-wide
+    if (m.userId && m.userId === userId) return true;  // author hears themselves
+    return visible.has(`${loc.x},${loc.y}`);
+  });
 }
