@@ -12,6 +12,9 @@ export function processMobilizations(worldId, ops, groups, chunkKey, tileKey, no
     if (group.mobilizedAt && lastTickTime && group.mobilizedAt >= lastTickTime) continue;
 
     ops.chunk(worldId, chunkKey, `${tileKey}.groups.${groupId}.status`, 'idle');
+    // The mobilised group is the owner's sight source now — flag for a targeted
+    // visibility push so newly in-range tiles/items refresh without a refetch.
+    ops.markSightDirty(group.owner);
 
     const [x, y] = tileKey.split(',').map(Number);
     ops.chat(worldId, {

@@ -11,6 +11,7 @@ import { getPlayerWorldData } from '../../db/players.js';
 import { ensureBoundLife, getLife, markSpawned } from '../../db/lives.js';
 import { makePlayerEntity } from '../../lib/identity.js';
 import { invalidate as invalidateVisibility } from '../../lib/visibility.js';
+import { pushVisibleChunks } from '../../core/sightPush.js';
 import { Ops } from '../../lib/ops.js';
 
 export async function spawnPlayer({ uid, data, db }) {
@@ -59,6 +60,8 @@ export async function spawnPlayer({ uid, data, db }) {
   // New sight source — force the next chunk fetch to rebuild visibility so the
   // spawn surroundings (incl. structures only player-sight covers) show at once.
   invalidateVisibility(worldId);
+  // Push the spawn surroundings straight to the player's sockets now.
+  await pushVisibleChunks(db, worldId, uid).catch(e => console.error('[sightPush] spawn:', e));
 
   return { success: true, lifeId: entityId, location: { x: spawnX, y: spawnY }, timestamp: now };
 }

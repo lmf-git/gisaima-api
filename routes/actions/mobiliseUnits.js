@@ -11,6 +11,7 @@ import { isInsideExclusion } from '../../db/spawns.js';
 import { getPlayerWorldData } from '../../db/players.js';
 import { patchLife } from '../../db/lives.js';
 import { invalidate as invalidateVisibility } from '../../lib/visibility.js';
+import { pushVisibleChunks } from '../../core/sightPush.js';
 import { broadcastToUser } from '../../core/ws.js';
 
 // Cache one terrain generator per world for the lifetime of the process.
@@ -228,6 +229,9 @@ export async function mobiliseUnits({ uid, data, db }) {
 
   // Sight sources changed (player entity → group) — rebuild on next fetch.
   invalidateVisibility(worldId);
+  // Push the player's watched chunks with fresh visibility now, so the map
+  // updates immediately rather than waiting for the next tick.
+  await pushVisibleChunks(db, worldId, uid).catch(e => console.error('[sightPush] mobilise:', e));
 
   return { success: true, groupId: newGroupId };
 }

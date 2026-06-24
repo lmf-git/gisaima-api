@@ -80,6 +80,25 @@ export function getClientCount() {
   return _wss ? _wss.clients.size : 0;
 }
 
+/**
+ * The set of chunkKeys a user's sockets are currently subscribed to in a world.
+ * Lets a sight-changing event (move/mobilise/demobilise/spawn) push fresh,
+ * per-player-filtered chunk data for exactly the chunks that client is watching
+ * — instead of the client blindly re-fetching everything over HTTP.
+ */
+export function getUserChunkSubscriptions(userId, worldId) {
+  const prefix = `chunk:${worldId}:`;
+  const out = new Set();
+  if (!userId) return out;
+  for (const [ws, uid] of wsUserIds) {
+    if (uid !== userId) continue;
+    const subs = subscriptions.get(ws);
+    if (!subs) continue;
+    for (const ch of subs) if (ch.startsWith(prefix)) out.add(ch.slice(prefix.length));
+  }
+  return out;
+}
+
 /** Close all client sockets and the WS server (called on graceful shutdown). */
 export function closeWss() {
   if (!_wss) return;

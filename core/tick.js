@@ -10,6 +10,7 @@ import { recordWorldTick, recordRun, storageReport } from './metrics.js';
 import { Ops } from '../lib/ops.js';
 import { trimChatMessages } from '../db/chat.js';
 import { broadcastChunkUpdate, broadcastWorldTick } from './ws.js';
+import { pushVisibleChunks } from './sightPush.js';
 import { refreshIfStale } from '../lib/visibility.js';
 import { TerrainGenerator } from 'gisaima-shared/map/noise.js';
 import { isNight } from 'gisaima-shared/time/era.js';
@@ -305,6 +306,24 @@ async function processWorld(db, worldId, worldData, now, fullSweep = false) {
   // flag from post-flush state (this is where idle chunks get demoted).
   const reclaim = await broadcastAndReconcile(db, worldId, ops, chunks, fullSweep);
   mark('broadcast');
+
+  // Players whose sight moved this tick (move/mobilise/demobilise) get a targeted
+  // push of the chunks they're watching that did NOT change this tick — those
+  // never get rebroadcast, yet may have come into (or dropped out of) their new
+  // view. The changed chunks were already broadcast above, so exclude them.
+  if (ops._sightDirty.size) {
+    const changed = new Set();
+    for (const { worldId: wId, chunkKey } of ops._chunks.values()) {
+      if (wId === worldId) changed.add(chunkKey);
+    }
+    await Promise.all(
+      [...ops._sightDirty].map(uid =>
+        pushVisibleChunks(db, worldId, uid, { exclude: changed })
+          .catch(e => console.error(`[sightPush] ${worldId}/${uid}:`, e))
+      )
+    );
+  }
+  mark('sightPush');
 
   // --- Async processors (use worldData already loaded) ---
   await upgradeTickProcessor(worldId, worldData, db);

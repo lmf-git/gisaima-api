@@ -145,6 +145,9 @@ export async function processMovement(worldId, ops, group, chunkKey, tileKey, gr
       // next tick reflect the new position (mirrors the spawn invalidation),
       // otherwise tiles newly in range stay hidden until something else changes.
       invalidateVisibility(worldId);
+      // …and flag the owner for a targeted post-broadcast push of the chunks
+      // that came into / out of view (no client-side full refetch needed).
+      ops.markSightDirty(group.owner);
     }
 
     const isSignificant = nextIndex % 3 === 0 || nextIndex === group.movementPath.length - 1;

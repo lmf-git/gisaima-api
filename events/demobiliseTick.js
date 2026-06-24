@@ -80,6 +80,10 @@ export async function processDemobilization(worldId, ops, group, chunkKey, tileK
           if (ownerUid) {
             ops.player(ownerUid, worldId, 'lastLocation', { x: loc.x, y: loc.y, timestamp: now });
             ops.player(ownerUid, worldId, 'inGroup', null);
+            // The character is now a standalone sight source at the structure —
+            // flag for a targeted visibility push so item drops / entities within
+            // its (player-radius) sight refresh without a client refetch.
+            ops.markSightDirty(ownerUid);
           }
           // Per-character placement back on the map.
           if (db) await patchLife(db, pu.id, { inGroup: null, alive: true, lastLocation: { x: loc.x, y: loc.y } });
