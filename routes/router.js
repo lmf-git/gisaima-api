@@ -3,7 +3,7 @@ import { handleGuestLogin, handleRegister, handleLogin, handleMe,
          getAuth, apiError } from '../core/auth.js';
 import { getWorlds, getWorld, getChunk, getWorldChat } from './worlds.js';
 import { getPlayerWorlds, getPlayerWorldState,
-         postRankingPrivacy, postProfile }              from './players.js';
+         postRankingPrivacy, postProfile, getPublicProfile } from './players.js';
 import { postChat }                                     from './chat.js';
 import { getReports, postReportRead, deleteReport }     from './reports.js';
 import { getTribes, postCreateTribe, postJoinTribe, postLeaveTribe, getWorldRankings } from './diplomacy.js';
@@ -177,6 +177,9 @@ export async function route(db, req, body) {
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'players' && s4 === 'search') {
     return searchPlayers(db, auth, s2, new URL(req.url, 'http://localhost').searchParams.get('q') || '');
   }
+  // Public read-only profile of any player in the world (must come after the
+  // more specific `players/search` match above).
+  if (method === 'GET'  && s1 === 'worlds' && s3 === 'players' && s4)                return getPublicProfile(db, auth, s2, s4);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && !s4)               return getFriends(db, auth, s2);
   if (method === 'GET'  && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') return getFriendRequests(db, auth, s2);
   if (method === 'POST' && s1 === 'worlds' && s3 === 'friends' && s4 === 'requests') {

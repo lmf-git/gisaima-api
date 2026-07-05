@@ -38,6 +38,31 @@ export async function getPlayerWorldState(db, auth, userId, worldId) {
 }
 
 /**
+ * Public, read-only profile for another player in a world. Returns only the
+ * fields safe to show anyone (identity, race, motto, avatar, skills, house) —
+ * no account/private data. Any signed-in player may view it.
+ */
+export async function getPublicProfile(db, auth, worldId, targetUid) {
+  const data = await getPlayerWorldData(db, targetUid, worldId);
+  if (!data) throw apiError(404, 'player not found');
+
+  const house = await getPlayerHouse(db, worldId, targetUid);
+
+  return {
+    uid: targetUid,
+    displayName: data.displayName || '',
+    race: data.race || null,
+    sex: data.sex || null,
+    motto: data.motto || '',
+    avatar: data.avatar || null,
+    skills: data.skills || {},
+    joined: data.joined || null,
+    alive: data.alive ?? null,
+    houseName: house ? house.name : null,
+  };
+}
+
+/**
  * Update the caller's profile for a world — personal motto and/or avatar.
  * The avatar arrives as a base64 data-URI in the JSON body (no multipart
  * parsing); it is uploaded to Cloudinary and only the resulting URL is stored.
