@@ -18,7 +18,7 @@
   "dependencies": {
     "cloudinary": "^2.5.1",
     "dotenv": "^17.4.1",
-    "gisaima-shared": "https://github.com/lmf-git/gisaima-v3-shared.git#1331b4fe35c994611464a45d077ff2178b347079",
+    "gisaima-shared": "https://github.com/lmf-git/gisaima-v3-shared.git#dca4a72922212fc8f8afe9acff4436b2c6dbf203",
     "mongodb": "^6.0.0",
     "nodemailer": "^8.0.10",
     "ws": "^8.0.0"
